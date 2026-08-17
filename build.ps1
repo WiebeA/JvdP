@@ -115,8 +115,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
     /reference:System.dll `
     /reference:System.Core.dll `
     /reference:System.Windows.Forms.dll `
-    /resource:$overlayExe,JvdpLightDarkroomOverlay.exe `
-    /resource:$updaterExe,JvdpAutoUpdater.exe `
+    ("/resource:{0},JvdpLightDarkroomOverlay.exe" -f $overlayExe) `
+    ("/resource:{0},JvdpAutoUpdater.exe" -f $updaterExe) `
     $installerBuildInfo `
     (Join-Path $projectRoot 'installer\InstallerProgram.cs') `
     (Join-Path $projectRoot 'installer\InstallOperations.cs') `
