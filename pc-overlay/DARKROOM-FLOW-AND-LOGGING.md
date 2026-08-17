@@ -51,7 +51,7 @@ V8 selects the exact value on the visible ISO ComboBox, posts plain `WM_COMMAND 
 
 The Settings menu is not clicked twice. One Settings command opens the current settings page; Darkroom's native Next Settings tool reaches Camera.
 
-V9 locks the ESP target ISO immediately when `RUN ACTION` starts, before settings navigation. It then requires ISO control 107 to remain visible with the same handle for three consecutive checks. The exact ComboBox is opened with `CB_SHOWDROPDOWN`, the target index is selected, and Enter is processed by the visible dropped ComboBox itself. No fabricated parent notification and no coordinate input is used.
+V9 locks the ESP target ISO immediately when an automatic or manual action starts, before settings navigation. It then requires ISO control 107 to remain visible with the same handle for three consecutive checks. The exact ComboBox is opened with `CB_SHOWDROPDOWN`, the target index is selected, and Enter is processed by the visible dropped ComboBox itself. No fabricated parent notification and no coordinate input is used.
 ## v10 native key commit
 
 V9 opened the visible dropdown and displayed the target, but `CB_SETCURSEL` still bypassed the ComboBox's own selection-change path. V10 stages the adjacent list item and then sends one native Up/Down key transition to land on the target through the ComboBox window procedure. It confirms with Enter, activates Camera Refresh 1104, reacquires stable visible ISO control 107, and only then allows the existing value check and Start Booth flow.

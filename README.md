@@ -81,6 +81,12 @@ The public repository needs no GitHub account or token. New installations use
 the stable update channel automatically. Run `JvdpAutoUpdater.exe --configure`
 only when a booth must switch between the stable and test channels.
 
+The overlay starts automatically when the Windows booth user signs in. As soon
+as Darkroom Booth is running and the ESP target ISO has been stable for 30
+seconds, the ISO check/change runs automatically and Booth Mode is started. The
+stability period is adjustable from 5 to 300 seconds in the overlay and is
+remembered after a reboot. `RUN NOW (MANUAL)` remains available as an override.
+
 ## Updating booths
 
 After initial setup no manual PC update is needed. The updater:

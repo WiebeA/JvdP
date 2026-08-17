@@ -6,9 +6,16 @@ Windows overlay for the JvdP ESP light sensor and Darkroom Booth.
 
 The current build version comes from the repository VERSION file. It controls Darkroom without coordinates, cursor movement, mouse clicks, DOM or MSAA.
 
-`RUN ACTION`:
+Automatic mode is the default. Once the ESP target has remained unchanged for
+the configured stability period (30 seconds by default) and Darkroom Booth is
+running, the overlay automatically performs the following flow. It starts Booth
+Mode when the flow is finished. `RUN NOW (MANUAL)` remains available as an
+immediate override.
 
-1. Leaves Booth Mode with Escape.
+The stability period can be changed in the overlay from 5 to 300 seconds. The
+setting is saved per Windows user and restored after a reboot.
+
+1. Leaves Booth Mode with Escape when necessary.
 2. Identifies Darkroom's one real `CXToolbar` through read-only process metadata.
 3. Sends Settings command `660` exactly once.
 4. Uses Darkroom's own native `Next Settings` command `662` (`0x0296`) to advance through at most ten pages.
@@ -33,7 +40,7 @@ V8 selects the exact value on the visible ISO ComboBox, posts plain `WM_COMMAND 
 
 The Settings menu is not clicked twice. One Settings command opens the current settings page; Darkroom's native Next Settings tool reaches Camera.
 
-V9 locks the ESP target ISO immediately when `RUN ACTION` starts, before settings navigation. It then requires ISO control 107 to remain visible with the same handle for three consecutive checks. The exact ComboBox is opened with `CB_SHOWDROPDOWN`, the target index is selected, and Enter is processed by the visible dropped ComboBox itself. No fabricated parent notification and no coordinate input is used.
+V9 locks the ESP target ISO immediately when an automatic or manual action starts, before settings navigation. It then requires ISO control 107 to remain visible with the same handle for three consecutive checks. The exact ComboBox is opened with `CB_SHOWDROPDOWN`, the target index is selected, and Enter is processed by the visible dropped ComboBox itself. No fabricated parent notification and no coordinate input is used.
 ## v10 native key commit
 
 V9 opened the visible dropdown and displayed the target, but `CB_SETCURSEL` still bypassed the ComboBox's own selection-change path. V10 stages the adjacent list item and then sends one native Up/Down key transition to land on the target through the ComboBox window procedure. It confirms with Enter, activates Camera Refresh 1104, reacquires stable visible ISO control 107, and only then allows the existing value check and Start Booth flow.
