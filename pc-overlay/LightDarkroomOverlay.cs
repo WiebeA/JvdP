@@ -169,6 +169,7 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly Label boothLabel;
         private readonly Label currentIsoLabel;
         private readonly Label countdownLabel;
+        private readonly NumericUpDown stabilitySecondsInput;
         private readonly Label actionLabel;
         private readonly Panel progressFill;
         private readonly Button runActionButton;
@@ -184,15 +185,22 @@ namespace Jvdp.LightDarkroomOverlay
         private volatile bool manualCoverVisible;
         private volatile bool manualActionRunning;
         private volatile bool manualActionFailed;
+        private volatile bool currentActionAutomatic;
         private string manualActionStatus = "";
         private DateTime manualActionStatusUntil = DateTime.MinValue;
+        private DateTime nextAutomaticAttemptAt = DateTime.MinValue;
+        private int stabilitySeconds = 30;
         private string currentDarkroomIso = "Unknown";
         private DateTime currentIsoReadAt = DateTime.MinValue;
         private bool darkroomRunning;
         private bool boothMode;
+        private int darkroomProcessId;
+        private int lastAppliedTargetIso;
+        private int lastAppliedDarkroomProcessId;
         private readonly string logPath;
         private readonly string positionPath;
         private readonly string sizePath;
+        private readonly string stabilityPath;
         private readonly List<ActionCoverForm> actionCovers = new List<ActionCoverForm>();
         private ManualCoverControlForm manualCoverControl;
         private readonly System.Windows.Forms.Timer coverGuardTimer;
@@ -228,6 +236,8 @@ namespace Jvdp.LightDarkroomOverlay
             logPath = Path.Combine(localRoot, "overlay.log");
             positionPath = Path.Combine(localRoot, "overlay-position.txt");
             sizePath = Path.Combine(localRoot, "overlay-size.txt");
+            stabilityPath = Path.Combine(localRoot, "stability-seconds.txt");
+            stabilitySeconds = LoadStabilitySeconds();
             Size savedSize;
             if (TryLoadOverlaySize(out savedSize))
                 Size = new Size(
@@ -313,12 +323,31 @@ namespace Jvdp.LightDarkroomOverlay
             currentIsoLabel = AddStatusRow("CURRENT DRB ISO", 312);
 
             Label stabilityCaption = MakeLabel(
-                "STABILITY", 9, FontStyle.Bold, Color.FromArgb(139, 148, 158));
+                "STABILITY (SEC)", 9, FontStyle.Bold, Color.FromArgb(139, 148, 158));
             stabilityCaption.SetBounds(20, 346, 120, 24);
             Controls.Add(stabilityCaption);
 
+            stabilitySecondsInput = new NumericUpDown();
+            stabilitySecondsInput.Minimum = 5;
+            stabilitySecondsInput.Maximum = 300;
+            stabilitySecondsInput.Increment = 5;
+            stabilitySecondsInput.Value = stabilitySeconds;
+            stabilitySecondsInput.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+            stabilitySecondsInput.ForeColor = Color.FromArgb(232, 238, 245);
+            stabilitySecondsInput.BackColor = Color.FromArgb(22, 27, 34);
+            stabilitySecondsInput.BorderStyle = BorderStyle.FixedSingle;
+            stabilitySecondsInput.TextAlign = HorizontalAlignment.Center;
+            stabilitySecondsInput.SetBounds(145, 345, 68, 25);
+            stabilitySecondsInput.ValueChanged += delegate
+            {
+                stabilitySeconds = (int)stabilitySecondsInput.Value;
+                SaveStabilitySeconds();
+                RefreshUi();
+            };
+            Controls.Add(stabilitySecondsInput);
+
             countdownLabel = MakeLabel(
-                "0.0 / 5.0 s", 9, FontStyle.Bold, Color.FromArgb(201, 209, 217));
+                "0.0 / 30.0 s", 9, FontStyle.Bold, Color.FromArgb(201, 209, 217));
             countdownLabel.TextAlign = ContentAlignment.MiddleRight;
             countdownLabel.SetBounds(ClientSize.Width - 150, 346, 130, 24);
             countdownLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
@@ -420,7 +449,7 @@ namespace Jvdp.LightDarkroomOverlay
                 phonePanel, "OPEN", PhoneDashboardAddress, 84, 12);
 
             runActionButton = new Button();
-            runActionButton.Text = "RUN ACTION";
+            runActionButton.Text = "RUN NOW (MANUAL)";
             runActionButton.Font = new Font("Segoe UI", 10, FontStyle.Bold);
             runActionButton.ForeColor = Color.White;
             runActionButton.BackColor = Color.FromArgb(31, 111, 235);
@@ -430,7 +459,7 @@ namespace Jvdp.LightDarkroomOverlay
                 ClientSize.Width - 40, 42);
             runActionButton.Anchor = AnchorStyles.Bottom |
                 AnchorStyles.Left | AnchorStyles.Right;
-            runActionButton.Click += delegate { StartManualTargetIsoAction(); };
+            runActionButton.Click += delegate { StartTargetIsoAction(false); };
             Controls.Add(runActionButton);
 
             coverToggleButton = new Button();
@@ -491,7 +520,9 @@ namespace Jvdp.LightDarkroomOverlay
                 RegisterHotKey(Handle, HotkeyTogglePause, ModControl | ModAlt, (uint)Keys.F9);
                 RegisterHotKey(Handle, HotkeyEmergencyPause, ModControl | ModAlt, (uint)Keys.F12);
                 EnsureSerialConnected();
-                Log("Overlay started; build=" + BuildTag + "; manual Darkroom test action is available.");
+                Log("Overlay started; build=" + BuildTag +
+                    "; automatic Darkroom actions enabled; stability=" +
+                    stabilitySeconds + " seconds.");
             };
 
             FormClosing += delegate
@@ -643,6 +674,31 @@ namespace Jvdp.LightDarkroomOverlay
             }
             catch { }
         }
+
+        private int LoadStabilitySeconds()
+        {
+            try
+            {
+                int value;
+                if (File.Exists(stabilityPath) &&
+                    Int32.TryParse(
+                        File.ReadAllText(stabilityPath).Trim(), out value))
+                    return Math.Max(5, Math.Min(300, value));
+            }
+            catch { }
+            return 30;
+        }
+
+        private void SaveStabilitySeconds()
+        {
+            try
+            {
+                File.WriteAllText(
+                    stabilityPath, stabilitySeconds.ToString());
+            }
+            catch { }
+        }
+
         private static Label MakeLabel(
             string text, float size, FontStyle style, Color color)
         {
@@ -716,26 +772,31 @@ namespace Jvdp.LightDarkroomOverlay
             RefreshUi();
         }
 
-        private void StartManualTargetIsoAction()
+        private void StartTargetIsoAction(bool automatic)
         {
             if (manualActionRunning)
                 return;
             manualActionRunning = true;
             manualActionFailed = false;
-            manualActionStatus = "Starting manual Darkroom test...";
+            currentActionAutomatic = automatic;
+            manualActionStatus = automatic
+                ? "Automatic action: preparing Darkroom..."
+                : "Manual action: preparing Darkroom...";
             manualActionStatusUntil = DateTime.MaxValue;
             runActionButton.Enabled = false;
             runActionButton.Text = "RUNNING...";
             coverToggleButton.Enabled = false;
-            Log("Manual ESP Target ISO action requested.");
-            Thread worker = new Thread(RunManualTargetIsoAction);
+            Log((automatic ? "Automatic" : "Manual") +
+                " ESP Target ISO action requested.");
+            Thread worker = new Thread(RunTargetIsoAction);
             worker.IsBackground = true;
             worker.SetApartmentState(ApartmentState.STA);
             worker.Start();
         }
 
-        private void RunManualTargetIsoAction()
+        private void RunTargetIsoAction()
         {
+            bool automatic = currentActionAutomatic;
             Process process = null;
             string finalStatus;
             bool failed = false;
@@ -750,7 +811,8 @@ namespace Jvdp.LightDarkroomOverlay
                     throw new InvalidOperationException(
                         "No valid Target ISO has been received from the ESP.");
                 Log("Locked ESP Target ISO " + desiredIso +
-                    " for this RUN ACTION before Darkroom navigation.");
+                    " for this " + (automatic ? "automatic" : "manual") +
+                    " action before Darkroom navigation.");
                 process = FindDarkroomProcess();
                 if (process == null)
                     throw new InvalidOperationException("Darkroom Booth is not running.");
@@ -827,6 +889,8 @@ namespace Jvdp.LightDarkroomOverlay
                 }
 
                 StartBoothModeAfterAction(window);
+                lastAppliedTargetIso = desiredIso;
+                lastAppliedDarkroomProcessId = process.Id;
                 finalStatus += " Booth mode started.";
                 Log(finalStatus);
             }
@@ -868,13 +932,24 @@ namespace Jvdp.LightDarkroomOverlay
             manualActionFailed = failed;
             manualActionStatus = finalStatus;
             manualActionStatusUntil = DateTime.Now.AddSeconds(12);
+            if (automatic && failed)
+            {
+                nextAutomaticAttemptAt = DateTime.Now.AddSeconds(
+                    Math.Max(30, stabilitySeconds));
+                Log("Automatic retry delayed until " +
+                    nextAutomaticAttemptAt.ToString("HH:mm:ss") + ".");
+            }
+            else if (!failed)
+            {
+                nextAutomaticAttemptAt = DateTime.MinValue;
+            }
             manualActionRunning = false;
             try
             {
                 BeginInvoke((MethodInvoker)delegate
                 {
                     runActionButton.Enabled = true;
-                    runActionButton.Text = "RUN ACTION";
+                    runActionButton.Text = "RUN NOW (MANUAL)";
                     coverToggleButton.Enabled = true;
                     UpdateCoverToggleButton();
                     RefreshUi();
@@ -2105,22 +2180,12 @@ namespace Jvdp.LightDarkroomOverlay
                 serialStatus = sensor.SerialStatus;
             }
 
-            modeLabel.Text = manualActionRunning
-                ? "RUNNING"
-                : (paused ? "PAUSED" : "MANUAL");
-            modeLabel.BackColor = manualActionRunning
-                ? Color.FromArgb(247, 201, 72)
-                : (paused
-                    ? Color.FromArgb(248, 81, 73)
-                    : Color.FromArgb(81, 216, 138));
-
             lightLabel.Text = light >= 0 ? light.ToString() : "—";
             rawLabel.Text = raw >= 0 ? "Raw: " + raw : "Raw: —";
             targetIsoLabel.Text = targetIso > 0 ? targetIso.ToString() : "—";
 
-            SetStatusLabel(
-                serialLabel, serialStatus,
-                serial != null && serial.IsOpen);
+            bool serialReady = serial != null && serial.IsOpen;
+            SetStatusLabel(serialLabel, serialStatus, serialReady);
             SetStatusLabel(
                 darkroomLabel,
                 darkroomRunning ? "Running" : "Not running",
@@ -2140,24 +2205,62 @@ namespace Jvdp.LightDarkroomOverlay
 
             double stableSeconds = 0.0;
             if (candidateSince != DateTime.MinValue)
-                stableSeconds = Math.Min(5.0, (DateTime.Now - candidateSince).TotalSeconds);
-            countdownLabel.Text = string.Format("{0:0.0} / 5.0 s", stableSeconds);
+            {
+                stableSeconds = Math.Min(
+                    stabilitySeconds,
+                    (DateTime.Now - candidateSince).TotalSeconds);
+            }
+            countdownLabel.Text = string.Format(
+                "{0:0.0} / {1:0.0} s", stableSeconds, stabilitySeconds);
             progressFill.Width = (int)Math.Round(
                 progressFill.Parent.ClientSize.Width *
-                stableSeconds / 5.0);
-            progressFill.BackColor = stableSeconds >= 5.0
+                stableSeconds / stabilitySeconds);
+            progressFill.BackColor = stableSeconds >= stabilitySeconds
                 ? Color.FromArgb(81, 216, 138)
                 : Color.FromArgb(247, 201, 72);
 
-            bool showManualStatus = manualActionRunning || DateTime.Now < manualActionStatusUntil;
-            actionLabel.Text = showManualStatus
+            TryStartAutomaticAction(targetIso, stableSeconds, serialReady);
+
+            modeLabel.Text = manualActionRunning
+                ? "RUNNING"
+                : (paused ? "PAUSED" : "AUTO");
+            modeLabel.BackColor = manualActionRunning
+                ? Color.FromArgb(247, 201, 72)
+                : (paused
+                    ? Color.FromArgb(248, 81, 73)
+                    : Color.FromArgb(81, 216, 138));
+
+            bool showActionStatus =
+                manualActionRunning || DateTime.Now < manualActionStatusUntil;
+            actionLabel.Text = showActionStatus
                 ? manualActionStatus
-                : BuildActionText(targetIso, stableSeconds, serial != null && serial.IsOpen);
-            actionLabel.ForeColor = showManualStatus && manualActionFailed
+                : BuildActionText(targetIso, stableSeconds, serialReady);
+            actionLabel.ForeColor = showActionStatus && manualActionFailed
                 ? Color.FromArgb(248, 81, 73)
                 : (manualActionRunning
                     ? Color.FromArgb(247, 201, 72)
                     : Color.FromArgb(201, 209, 217));
+        }
+
+        private void TryStartAutomaticAction(
+            int targetIso, double stableSeconds, bool serialReady)
+        {
+            if (paused || manualActionRunning || !serialReady ||
+                targetIso <= 0 || !darkroomRunning ||
+                stableSeconds < stabilitySeconds ||
+                DateTime.Now < nextAutomaticAttemptAt)
+                return;
+
+            if (lastAppliedTargetIso == targetIso &&
+                lastAppliedDarkroomProcessId == darkroomProcessId)
+                return;
+
+            if (String.Equals(
+                    currentDarkroomIso, targetIso.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+
+            StartTargetIsoAction(true);
         }
 
         private void SetStatusLabel(Label label, string text, bool good)
@@ -2168,28 +2271,39 @@ namespace Jvdp.LightDarkroomOverlay
                 : Color.FromArgb(248, 81, 73);
         }
 
-        private string BuildActionText(int targetIso, double stableSeconds, bool serialReady)
+        private string BuildActionText(
+            int targetIso, double stableSeconds, bool serialReady)
         {
             if (paused)
-                return "Paused — no Darkroom actions are possible.";
+                return "Paused — automatic Darkroom actions are disabled.";
             if (!serialReady || targetIso <= 0)
-                return "Waiting for ESP sensor data…";
+                return "Auto waiting for ESP sensor data…";
             if (!darkroomRunning)
-                return "Would wait: Darkroom Booth is not running.";
-            if (!boothMode)
-                return "Would wait: Booth mode is not active.";
-            if (stableSeconds < 5.0)
+                return "Auto waiting: Darkroom Booth is not running.";
+            if (DateTime.Now < nextAutomaticAttemptAt)
                 return string.Format(
-                    "Would wait {0:0.0}s for a stable target.", 5.0 - stableSeconds);
+                    "Automatic retry in {0:0}s.",
+                    (nextAutomaticAttemptAt - DateTime.Now).TotalSeconds);
+            if (stableSeconds < stabilitySeconds)
+                return string.Format(
+                    "Auto waiting {0:0.0}s for a stable target.",
+                    stabilitySeconds - stableSeconds);
+            if (lastAppliedTargetIso == targetIso &&
+                lastAppliedDarkroomProcessId == darkroomProcessId)
+                return string.Format(
+                    "Auto active — sensor target ISO {0} has been handled.",
+                    targetIso);
             if (currentDarkroomIso == "Unknown")
                 return string.Format(
-                    "Would verify current Darkroom ISO, target {0}.", targetIso);
-            if (String.Equals(currentDarkroomIso, targetIso.ToString(),
-                              StringComparison.OrdinalIgnoreCase))
+                    "Auto ready — verifying current Darkroom ISO, target {0}.",
+                    targetIso);
+            if (String.Equals(
+                    currentDarkroomIso, targetIso.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
                 return string.Format(
-                    "No change needed — Darkroom is already ISO {0}.", targetIso);
+                    "Auto active — Darkroom is already ISO {0}.", targetIso);
             return string.Format(
-                "Would change Darkroom ISO {0} → {1}.",
+                "Auto ready — changing Darkroom ISO {0} → {1}.",
                 currentDarkroomIso, targetIso);
         }
 
@@ -2198,7 +2312,8 @@ namespace Jvdp.LightDarkroomOverlay
             Process process = null;
             try
             {
-                Process[] candidates = Process.GetProcessesByName("DarkroomBooth");
+                Process[] candidates =
+                    Process.GetProcessesByName("DarkroomBooth");
                 foreach (Process candidate in candidates)
                 {
                     if (candidate.MainWindowHandle != IntPtr.Zero)
@@ -2213,13 +2328,27 @@ namespace Jvdp.LightDarkroomOverlay
 
             if (process == null)
             {
-                darkroomRunning = false;
-                boothMode = false;
+                if (darkroomProcessId != 0)
+                    Log("Darkroom Booth stopped; cached ISO cleared.");
+                ResetDarkroomSession();
                 return;
             }
 
             try
             {
+                int processId = process.Id;
+                if (darkroomProcessId != processId)
+                {
+                    darkroomProcessId = processId;
+                    currentDarkroomIso = "Unknown";
+                    currentIsoReadAt = DateTime.MinValue;
+                    lastAppliedTargetIso = 0;
+                    lastAppliedDarkroomProcessId = 0;
+                    nextAutomaticAttemptAt = DateTime.MinValue;
+                    Log("Darkroom Booth detected; process=" + processId +
+                        "; ISO will be verified automatically.");
+                }
+
                 darkroomRunning = true;
                 IntPtr window = process.MainWindowHandle;
                 boothMode = IsIconic(window) || WindowFillsScreen(window);
@@ -2237,8 +2366,7 @@ namespace Jvdp.LightDarkroomOverlay
             }
             catch
             {
-                darkroomRunning = false;
-                boothMode = false;
+                ResetDarkroomSession();
             }
             finally
             {
@@ -2246,6 +2374,17 @@ namespace Jvdp.LightDarkroomOverlay
             }
         }
 
+        private void ResetDarkroomSession()
+        {
+            darkroomRunning = false;
+            boothMode = false;
+            darkroomProcessId = 0;
+            currentDarkroomIso = "Unknown";
+            currentIsoReadAt = DateTime.MinValue;
+            lastAppliedTargetIso = 0;
+            lastAppliedDarkroomProcessId = 0;
+            nextAutomaticAttemptAt = DateTime.MinValue;
+        }
         private static bool WindowFillsScreen(IntPtr window)
         {
             NativeMethods.Rect rect;
