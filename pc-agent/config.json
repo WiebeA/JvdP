@@ -1,0 +1,11 @@
+{
+  "serialPort": "",
+  "stableSeconds": 5,
+  "retrySeconds": 15,
+  "darkroomWindowTitleRegex": "(?i)darkroom.*booth|booth.*darkroom",
+  "isoControlId": 107,
+  "startBoothControlId": 538,
+  "settingsControlId": 4083,
+  "cameraTabControlId": 1116,
+  "dryRun": false
+}

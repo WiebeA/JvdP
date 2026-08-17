@@ -1,0 +1,36 @@
+# PlatformIO and generated build output
+.pio/
+.generated/
+artifacts/
+
+# Compiled output and temporary compiler files
+*.bin
+*.checksum
+*.dblite
+*.d
+*.exe
+*.o
+*.obj
+*.pdb
+*.tmp
+*.zip
+
+# Local diagnostics and logs
+*.log
+pc-overlay/diagnostics/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local/private configuration
+secrets.ini
+secrets.h
+update-token.dat
+
+# Editor, Windows and backup files
+.vs/
+.vscode/
+desktop.ini
+*.bak
+*~

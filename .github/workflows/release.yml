@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      JVDP_AP_SSID: JvdP-LightSensor
+      JVDP_AP_PASSWORD: ${{ secrets.JVDP_AP_PASSWORD }}
+      JVDP_OTA_PASSWORD: ${{ secrets.JVDP_OTA_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Validate release configuration
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw VERSION).Trim()
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match VERSION $version."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:JVDP_AP_PASSWORD)) {
+            throw "Repository secret JVDP_AP_PASSWORD is missing."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:JVDP_OTA_PASSWORD)) {
+            throw "Repository secret JVDP_OTA_PASSWORD is missing."
+          }
+          if ($env:JVDP_AP_PASSWORD -eq $env:JVDP_OTA_PASSWORD) {
+            throw "AP and OTA passwords must be different."
+          }
+      - name: Install PlatformIO
+        run: python -m pip install platformio
+      - name: Build release
+        shell: pwsh
+        run: ./build.ps1
+      - name: Create checksums
+        shell: pwsh
+        run: |
+          $names = @(
+            "JvdP-Photobooth-Lichtsensor-Installatie.exe",
+            "firmware.bin"
+          )
+          $lines = foreach ($name in $names) {
+            $file = Join-Path "artifacts" $name
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+            "$hash  $name"
+          }
+          [IO.File]::WriteAllLines(
+            (Join-Path "artifacts" "SHA256SUMS.txt"),
+            $lines,
+            [Text.UTF8Encoding]::new($false))
+      - name: Publish GitHub release
+        shell: pwsh
+        run: |
+          $arguments = @(
+            "release", "create", $env:GITHUB_REF_NAME,
+            "artifacts/JvdP-Photobooth-Lichtsensor-Installatie.exe",
+            "artifacts/firmware.bin",
+            "artifacts/SHA256SUMS.txt",
+            "--repo", $env:GITHUB_REPOSITORY,
+            "--title", "JvdP $env:GITHUB_REF_NAME",
+            "--generate-notes"
+          )
+          if ($env:GITHUB_REF_NAME -match "-") {
+            $arguments += "--prerelease"
+          }
+          gh @arguments
