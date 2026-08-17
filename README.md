@@ -77,13 +77,9 @@ Download the installer from the selected GitHub release and run it once under
 the Windows account used by the booth. It installs per user and starts both the
 overlay and updater automatically at sign-in.
 
-On first installation the updater asks for:
-
-- a fine-grained GitHub token with read-only Contents access to WiebeA/JvdP;
-- channel stable for production booths or test for the test booth.
-
-The token is encrypted locally with Windows DPAPI. It is never placed in source
-code or a plaintext configuration file.
+The public repository needs no GitHub account or token. New installations use
+the stable update channel automatically. Run `JvdpAutoUpdater.exe --configure`
+only when a booth must switch between the stable and test channels.
 
 ## Updating booths
 

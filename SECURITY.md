@@ -14,16 +14,12 @@ either value is missing or when they are equal.
 
 ## Booth update access
 
-Each booth needs a fine-grained GitHub token with read-only Contents access to
-WiebeA/JvdP. The updater encrypts this token with Windows DPAPI for the current
-Windows user. The plaintext token is never written to disk or committed.
-
-Prefer one revocable token per booth. Do not send tokens through chat, email or
-command-line arguments.
+The repository and release downloads are public. Booths do not store GitHub
+credentials. The updater requests only public release metadata and assets.
 
 ## Release integrity
 
-The updater downloads release assets through authenticated HTTPS and verifies
+The updater downloads release assets through HTTPS and verifies
 the installer against SHA256SUMS.txt before executing it.
 
 Windows code signing is not configured yet. Add an Authenticode certificate

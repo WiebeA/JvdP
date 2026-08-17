@@ -149,7 +149,7 @@ namespace Jvdp.LightDarkroomInstaller
                 "Installed=" + DateTime.Now.ToString("s") + "\r\n" +
                 "Startup=Current user logon\r\n" +
                 "SerialPort=Automatic JVDP validation\r\n" +
-                "Updates=Automatic test/stable channels\r\n";
+                "Updates=Automatic public stable/test channels\r\n";
             File.WriteAllText(
                 Path.Combine(installDirectory, "installation.txt"),
                 metadata, new UTF8Encoding(false));
@@ -172,12 +172,8 @@ namespace Jvdp.LightDarkroomInstaller
                 UseShellExecute = true
             });
 
-            string tokenPath =
-                Path.Combine(installDirectory, "update-token.dat");
             Process.Start(new ProcessStartInfo {
                 FileName = installedUpdater,
-                Arguments = !quiet && !File.Exists(tokenPath)
-                    ? "--configure" : "",
                 WorkingDirectory = installDirectory,
                 UseShellExecute = true
             });

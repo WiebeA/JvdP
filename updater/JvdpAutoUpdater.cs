@@ -35,8 +35,7 @@ namespace Jvdp.AutoUpdater
             Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData),
             "JvdP", "LightDarkroomOverlay");
-        private static readonly string TokenPath =
-            Path.Combine(LocalRoot, "update-token.dat");
+
         private static readonly string ChannelPath =
             Path.Combine(LocalRoot, "update-channel.txt");
         private static readonly string ReleaseTagPath =
@@ -63,18 +62,11 @@ namespace Jvdp.AutoUpdater
                 if (!ownsMutex)
                     return 0;
 
-                string token = LoadToken();
-                if (String.IsNullOrWhiteSpace(token))
-                {
-                    Log("Automatic updates are not configured.");
-                    return 0;
-                }
-
                 do
                 {
                     try
                     {
-                        if (CheckForUpdate(token))
+                        if (CheckForUpdate())
                             return 0;
                     }
                     catch (Exception exception)
@@ -106,8 +98,6 @@ namespace Jvdp.AutoUpdater
 
             using (Form form = new Form())
             using (Label explanation = new Label())
-            using (Label tokenLabel = new Label())
-            using (TextBox tokenBox = new TextBox())
             using (Label channelLabel = new Label())
             using (ComboBox channelBox = new ComboBox())
             using (Button saveButton = new Button())
@@ -115,41 +105,35 @@ namespace Jvdp.AutoUpdater
             {
                 form.Text = "JvdP automatic updates";
                 form.Width = 520;
-                form.Height = 285;
+                form.Height = 225;
                 form.StartPosition = FormStartPosition.CenterScreen;
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
 
                 explanation.Text =
-                    "Paste a fine-grained GitHub token with read-only " +
-                    "Contents access to WiebeA/JvdP. The token is encrypted " +
-                    "for this Windows user.";
-                explanation.SetBounds(20, 18, 465, 55);
-
-                tokenLabel.Text = "GitHub token";
-                tokenLabel.SetBounds(20, 82, 120, 22);
-                tokenBox.UseSystemPasswordChar = true;
-                tokenBox.SetBounds(145, 80, 340, 25);
+                    "Updates are downloaded from the public WiebeA/JvdP " +
+                    "repository. No GitHub account or token is required.";
+                explanation.SetBounds(20, 18, 465, 45);
 
                 channelLabel.Text = "Update channel";
-                channelLabel.SetBounds(20, 122, 120, 22);
+                channelLabel.SetBounds(20, 82, 120, 22);
                 channelBox.DropDownStyle = ComboBoxStyle.DropDownList;
                 channelBox.Items.AddRange(new object[] { "stable", "test" });
                 channelBox.SelectedItem = LoadChannel();
                 if (channelBox.SelectedIndex < 0)
                     channelBox.SelectedIndex = 0;
-                channelBox.SetBounds(145, 120, 160, 25);
+                channelBox.SetBounds(145, 80, 160, 25);
 
                 saveButton.Text = "Save";
                 saveButton.DialogResult = DialogResult.OK;
-                saveButton.SetBounds(305, 180, 85, 30);
+                saveButton.SetBounds(305, 130, 85, 30);
                 cancelButton.Text = "Cancel";
                 cancelButton.DialogResult = DialogResult.Cancel;
-                cancelButton.SetBounds(400, 180, 85, 30);
+                cancelButton.SetBounds(400, 130, 85, 30);
 
                 form.Controls.AddRange(new Control[] {
-                    explanation, tokenLabel, tokenBox, channelLabel,
+                    explanation, channelLabel,
                     channelBox, saveButton, cancelButton
                 });
                 form.AcceptButton = saveButton;
@@ -157,15 +141,7 @@ namespace Jvdp.AutoUpdater
 
                 if (form.ShowDialog() != DialogResult.OK)
                     return 0;
-                if (String.IsNullOrWhiteSpace(tokenBox.Text))
-                {
-                    MessageBox.Show("A GitHub token is required.",
-                        "JvdP automatic updates", MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                    return 1;
-                }
 
-                SaveToken(tokenBox.Text.Trim());
                 File.WriteAllText(ChannelPath,
                     Convert.ToString(channelBox.SelectedItem),
                     new UTF8Encoding(false));
@@ -182,36 +158,6 @@ namespace Jvdp.AutoUpdater
             }
         }
 
-        private static void SaveToken(string token)
-        {
-            byte[] plain = Encoding.UTF8.GetBytes(token);
-            try
-            {
-                byte[] encrypted = ProtectedData.Protect(
-                    plain, null, DataProtectionScope.CurrentUser);
-                File.WriteAllBytes(TokenPath, encrypted);
-            }
-            finally
-            {
-                Array.Clear(plain, 0, plain.Length);
-            }
-        }
-
-        private static string LoadToken()
-        {
-            string environmentToken =
-                Environment.GetEnvironmentVariable("JVDP_GITHUB_TOKEN");
-            if (!String.IsNullOrWhiteSpace(environmentToken))
-                return environmentToken.Trim();
-            if (!File.Exists(TokenPath))
-                return "";
-            byte[] encrypted = File.ReadAllBytes(TokenPath);
-            byte[] plain = ProtectedData.Unprotect(
-                encrypted, null, DataProtectionScope.CurrentUser);
-            try { return Encoding.UTF8.GetString(plain); }
-            finally { Array.Clear(plain, 0, plain.Length); }
-        }
-
         private static string LoadChannel()
         {
             if (!File.Exists(ChannelPath))
@@ -220,10 +166,10 @@ namespace Jvdp.AutoUpdater
             return value == "test" ? "test" : "stable";
         }
 
-        private static bool CheckForUpdate(string token)
+        private static bool CheckForUpdate()
         {
             string channel = LoadChannel();
-            GitHubRelease release = GetRelease(token, channel);
+            GitHubRelease release = GetRelease(channel);
             if (release == null || release.draft ||
                 String.IsNullOrWhiteSpace(release.tag_name))
                 return false;
@@ -250,10 +196,10 @@ namespace Jvdp.AutoUpdater
                     "The release is missing the installer or checksums.");
 
             string checksumText = Encoding.UTF8.GetString(
-                DownloadAsset(checksums, token));
+                DownloadAsset(checksums));
             string expectedHash = FindExpectedHash(
                 checksumText, InstallerAsset);
-            byte[] installerBytes = DownloadAsset(installer, token);
+            byte[] installerBytes = DownloadAsset(installer);
             string actualHash = ComputeSha256(installerBytes);
             if (!String.Equals(expectedHash, actualHash,
                 StringComparison.OrdinalIgnoreCase))
@@ -278,19 +224,18 @@ namespace Jvdp.AutoUpdater
             return true;
         }
 
-        private static GitHubRelease GetRelease(
-            string token, string channel)
+        private static GitHubRelease GetRelease(string channel)
         {
             JavaScriptSerializer serializer = new JavaScriptSerializer();
             string baseUrl = "https://api.github.com/repos/" +
                 Repository + "/releases";
             if (channel == "stable")
                 return serializer.Deserialize<GitHubRelease>(
-                    DownloadText(baseUrl + "/latest", token));
+                    DownloadText(baseUrl + "/latest"));
 
             GitHubRelease[] releases =
                 serializer.Deserialize<GitHubRelease[]>(
-                    DownloadText(baseUrl + "?per_page=20", token));
+                    DownloadText(baseUrl + "?per_page=20"));
             foreach (GitHubRelease release in releases)
                 if (!release.draft)
                     return release;
@@ -309,26 +254,22 @@ namespace Jvdp.AutoUpdater
             return null;
         }
 
-        private static string DownloadText(string url, string token)
+        private static string DownloadText(string url)
         {
             return Encoding.UTF8.GetString(
-                Download(url, token, "application/vnd.github+json"));
+                Download(url, "application/vnd.github+json"));
         }
 
-        private static byte[] DownloadAsset(
-            GitHubAsset asset, string token)
+        private static byte[] DownloadAsset(GitHubAsset asset)
         {
-            return Download(asset.url, token, "application/octet-stream");
+            return Download(asset.url, "application/octet-stream");
         }
 
-        private static byte[] Download(
-            string url, string token, string accept)
+        private static byte[] Download(string url, string accept)
         {
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
             request.UserAgent = "JvdP-AutoUpdater/" + BuildInfo.Version;
             request.Accept = accept;
-            request.Headers[HttpRequestHeader.Authorization] =
-                "Bearer " + token;
             request.AutomaticDecompression =
                 DecompressionMethods.GZip | DecompressionMethods.Deflate;
             using (HttpWebResponse response =
