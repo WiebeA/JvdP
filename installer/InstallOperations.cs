@@ -57,7 +57,7 @@ namespace Jvdp.LightDarkroomInstaller
                 installDirectory, quiet);
             ShowMessage(
                 ProductName + " is geinstalleerd en gestart.\r\n\r\n" +
-                "De overlay en automatische updater starten voortaan " +
+                "De lichtsensor-app en automatische updater starten voortaan " +
                 "wanneer deze Windows-gebruiker zich aanmeldt.\r\n\r\n" +
                 "Installatiemap:\r\n" + installDirectory,
                 MessageBoxIcon.Information, quiet);
@@ -168,6 +168,7 @@ namespace Jvdp.LightDarkroomInstaller
         {
             Process.Start(new ProcessStartInfo {
                 FileName = installedExe,
+                Arguments = quiet ? "--startup" : "",
                 WorkingDirectory = installDirectory,
                 UseShellExecute = true
             });

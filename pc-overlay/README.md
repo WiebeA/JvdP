@@ -1,26 +1,38 @@
-# JvdP Light to Darkroom Overlay
+# JvdP Light to Darkroom
 
-Windows overlay for the JvdP ESP light sensor and Darkroom Booth.
+Windows system-tray application for the JvdP ESP light sensor and Darkroom Booth.
+
+At Windows sign-in the application starts silently in the system tray. Double-click
+the tray icon or choose `Openen` to show the normal Windows window. Minimizing
+or closing that window returns it to the tray. Choose `Afsluiten` in the tray menu to stop
+the application completely.
 
 ## Current build
 
 The current build version comes from the repository VERSION file. It controls Darkroom without coordinates, cursor movement, mouse clicks, DOM or MSAA.
 
-Automatic mode is the default. Once the ESP target has remained unchanged for
+Automatic mode is the default. Once the PC-mapped target has remained unchanged for
 the configured stability period (30 seconds by default) and Darkroom Booth is
-running, the overlay automatically performs the following flow. It starts Booth
+running, the application automatically performs the following flow. It starts Booth
 Mode when the flow is finished. `RUN NOW (MANUAL)` remains available as an
 immediate override.
 
-The stability period can be changed in the overlay from 5 to 300 seconds. The
-setting is saved per Windows user and restored after a reboot.
+The ESP sends only its 0–100 light value. This application maps that value to the
+target ISO. A booth can use the released default profile shared by all booths, or
+enable and edit its own local profile. The stability period can be changed in the
+window from 5 to 300 seconds. Both choices are saved per Windows user and restored
+after a reboot.
+
+Serial discovery and the periodic Darkroom control probe run outside the UI thread.
+Opening a slow COM port or waiting for a Darkroom native control cannot freeze the
+main window.
 
 1. Leaves Booth Mode with Escape when necessary.
 2. Identifies Darkroom's one real `CXToolbar` through read-only process metadata.
 3. Sends Settings command `660` exactly once.
 4. Uses Darkroom's own native `Next Settings` command `662` (`0x0296`) to advance through at most ten pages.
 5. Stops as soon as native ISO ComboBox control `107` appears; that is the Camera page.
-6. Reads the current ISO and changes it only when it differs from the ESP target.
+6. Reads the current ISO and changes it only when it differs from the PC target.
 7. Confirms the selected ISO, then starts Booth Mode again.
 
 The v5 accessibility/MSAA Camera search was removed after the test showed that Darkroom had already opened the native `Photos` settings page and the overlay then terminated during accessibility enumeration. Camera no longer needs to be found as a tile or label.

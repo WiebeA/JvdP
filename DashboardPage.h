@@ -102,21 +102,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"DASHBOARD(
       </div>
       <div class="reading-foot">
         <span id="rawValue">Raw ADC: ---- / 4095</span>
-        <output class="iso-now" id="currentIso">ISO ----</output>
-      </div>
-    </section>
-
-    <section class="card" aria-labelledby="mappingTitle">
-      <div class="card-head">
-        <h2 id="mappingTitle">ISO mapping</h2>
-        <span class="small" id="rangeCount">4 ranges</span>
-      </div>
-      <p class="mapping-intro">Set which ISO value belongs to each light range. Ranges always connect and cover the full 0–100 scale.</p>
-      <div class="mapping-head" aria-hidden="true"><span>Light range</span><span>ISO value</span><span></span></div>
-      <div id="rangeRows"></div>
-      <div class="button-row">
-        <button class="button" id="addRange" type="button">Add range</button>
-        <button class="button primary" id="saveMapping" type="button">Save ISO mapping</button>
+        <span>Sensor output only</span>
       </div>
     </section>
 
@@ -152,101 +138,12 @@ static const char DASHBOARD_HTML[] PROGMEM = R"DASHBOARD(
 
   <script>
     const $=selector=>document.querySelector(selector);
-    const rows=$('#rangeRows');
-    const MAX_RANGES=8;
-    const ISO_VALUES=[100,200,400,800,1600,3200,6400,12800];
-    let editingBands=[];
-    let mappingDirty=false;
-    let toastTimer;
-
-    function showToast(message){
-      const element=$('#toast');
-      element.textContent=message;
-      element.classList.add('show');
-      clearTimeout(toastTimer);
-      toastTimer=setTimeout(()=>element.classList.remove('show'),1500);
-    }
 
     async function request(path,options){
       const response=await fetch(path,options);
       const data=await response.json();
       if(!response.ok||data.ok===false)throw new Error(data.error||'Request failed');
       return data;
-    }
-
-    function renderBands(){
-      rows.innerHTML='';
-      editingBands.forEach((band,index)=>{
-        const lower=index===0?0:editingBands[index-1].max+1;
-        const last=index===editingBands.length-1;
-        const row=document.createElement('div');
-        row.className='range-row';
-        row.innerHTML=`
-          <div class="range-fields">
-            <input class="field" type="number" value="${lower}" aria-label="Range ${index+1} lower limit" readonly>
-            <span>to</span>
-            <input class="field upper" type="number" min="${lower}" max="100" value="${band.max}" aria-label="Range ${index+1} upper limit" ${last?'readonly':''}>
-          </div>
-          <select class="field iso" aria-label="ISO value for range ${lower} to ${band.max}">${ISO_VALUES.map(value=>`<option value="${value}" ${value===band.iso?'selected':''}>ISO ${value}</option>`).join('')}</select>
-          <button class="remove" type="button" aria-label="Remove range ${index+1}" title="Remove range" ${editingBands.length===1?'disabled':''}>&times;</button>`;
-
-        row.querySelector('.upper').addEventListener('change',event=>{
-          band.max=Math.max(0,Math.min(100,Number(event.target.value)||0));
-          normaliseBands();
-          mappingDirty=true;
-          renderBands();
-        });
-        row.querySelector('.iso').addEventListener('change',event=>{
-          band.iso=Number(event.target.value);
-          mappingDirty=true;
-        });
-        row.querySelector('.remove').addEventListener('click',()=>removeBand(index));
-        rows.appendChild(row);
-      });
-      $('#rangeCount').textContent=`${editingBands.length} ${editingBands.length===1?'range':'ranges'}`;
-      $('#addRange').disabled=editingBands.length>=MAX_RANGES;
-    }
-
-    function normaliseBands(){
-      editingBands.sort((a,b)=>a.max-b.max);
-      for(let index=0;index<editingBands.length-1;index++){
-        const minimum=index===0?0:editingBands[index-1].max+1;
-        const maximum=99-(editingBands.length-2-index);
-        editingBands[index].max=Math.max(minimum,Math.min(maximum,editingBands[index].max));
-      }
-      editingBands[editingBands.length-1].max=100;
-    }
-
-    function addBand(){
-      if(editingBands.length>=MAX_RANGES)return;
-      const lastIndex=editingBands.length-1;
-      const lower=lastIndex===0?0:editingBands[lastIndex-1].max+1;
-      if(lower>=100){showToast('No room for another range');return}
-      const current=editingBands[lastIndex];
-      const split=Math.floor((lower+99)/2);
-      editingBands.splice(lastIndex,0,{max:split,iso:current.iso});
-      normaliseBands();
-      mappingDirty=true;
-      renderBands();
-    }
-
-    function removeBand(index){
-      if(editingBands.length<=1)return;
-      editingBands.splice(index,1);
-      normaliseBands();
-      mappingDirty=true;
-      renderBands();
-    }
-
-    function validateBands(){
-      if(!editingBands.length)return false;
-      let previous=-1;
-      for(const band of editingBands){
-        if(!Number.isInteger(band.max)||band.max<=previous||band.max>100)return false;
-        if(!ISO_VALUES.includes(band.iso))return false;
-        previous=band.max;
-      }
-      return previous===100;
     }
 
     function applyState(state){
@@ -257,14 +154,9 @@ static const char DASHBOARD_HTML[] PROGMEM = R"DASHBOARD(
       const meter=$('.meter');
       meter.setAttribute('aria-valuenow',light);
       $('#rawValue').textContent=`Raw ADC: ${state.rawLight} / 4095`;
-      $('#currentIso').textContent=`ISO ${state.currentIso}`;
       $('#hotspotStatus').textContent=state.apActive?'Active':'Inactive';
       $('#hotspotSsid').textContent=state.apSsid;
       $('#hotspotIp').textContent=state.apIp;
-      if(!mappingDirty&&Array.isArray(state.bands)){
-        editingBands=state.bands.map(band=>({max:Number(band.max),iso:Number(band.iso)}));
-        renderBands();
-      }
     }
 
     async function refresh(){
@@ -272,24 +164,6 @@ static const char DASHBOARD_HTML[] PROGMEM = R"DASHBOARD(
       catch(error){$('#connection').textContent='Offline'}
     }
 
-    async function saveMapping(){
-      normaliseBands();
-      if(!validateBands()){showToast('Check the range values');renderBands();return}
-      const body=new URLSearchParams({
-        bandCount:String(editingBands.length),
-        bounds:editingBands.map(band=>band.max).join(','),
-        isos:editingBands.map(band=>band.iso).join(',')
-      });
-      try{
-        const result=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
-        mappingDirty=false;
-        applyState(result.state);
-        showToast(result.message||'ISO mapping saved');
-      }catch(error){showToast('No connection')}
-    }
-
-    $('#addRange').addEventListener('click',addBand);
-    $('#saveMapping').addEventListener('click',saveMapping);
     refresh();
     setInterval(refresh,600);
   </script>

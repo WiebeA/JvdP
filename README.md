@@ -1,19 +1,21 @@
 # JvdP Light Sensor for Darkroom Booth
 
 This repository builds the ESP32-C3 light sensor firmware, the Windows Darkroom
-overlay, the installer and the automatic updater.
+tray application, the installer and the automatic updater.
 
 Version is controlled by the single VERSION file.
 
 ## How it works
 
-1. The ESP reads the LDR on GPIO 0 and maps the light percentage to an ISO.
-2. It sends JVDP|light=...|iso=... over USB serial.
-3. The Windows overlay scans all serial ports. A port is accepted only after a
+1. The ESP reads the LDR on GPIO 0 and converts it to a 0–100 light value.
+2. It sends only `JVDP|light=...` over USB serial.
+3. The Windows tray application scans all serial ports. A port is accepted only after a
    valid JVDP line is received, so booth PCs do not need a fixed COM number.
-4. The overlay waits for a stable target and controls Darkroom through its native
-   controls.
-5. The updater checks the selected GitHub release channel every 30 minutes.
+4. The Windows application maps the light value to ISO. Each booth can use the
+   centrally maintained default profile or its own locally saved custom profile.
+5. The application waits for a stable PC-mapped target and controls Darkroom
+   through its native controls.
+6. The updater checks the selected GitHub release channel every 30 minutes.
 
 ## Passwords
 
@@ -50,7 +52,7 @@ Generated files are written to artifacts/:
 
 ## ESP port detection
 
-The production overlay automatically checks every available serial port and
+The production tray application automatically checks every available serial port and
 validates the ESP protocol. For a standalone diagnostic run:
 
     ./tools/Find-JvdpEspPort.ps1
@@ -75,27 +77,56 @@ version tags are stable releases.
 
 Download the installer from the selected GitHub release and run it once under
 the Windows account used by the booth. It installs per user and starts both the
-overlay and updater automatically at sign-in.
+tray application and updater automatically at sign-in.
 
 The public repository needs no GitHub account or token. New installations use
 the stable update channel automatically. Run `JvdpAutoUpdater.exe --configure`
 only when a booth must switch between the stable and test channels.
 
-The overlay starts automatically when the Windows booth user signs in. As soon
-as Darkroom Booth is running and the ESP target ISO has been stable for 30
+The application starts active in the Windows system tray when the booth user signs in.
+Double-clicking the lamp tray icon opens the light, touch-friendly Windows dashboard.
+Minimizing or closing the window always sends it back to the tray; only the explicit
+`Afsluiten` tray command exits the application completely. Starting the executable a
+second time reopens the already running dashboard instead of creating a competing
+sensor connection. As soon
+as Darkroom Booth is running and the PC-mapped target ISO has been stable for 30
 seconds, the ISO check/change runs automatically and Booth Mode is started. The
-stability period is adjustable from 5 to 300 seconds in the overlay and is
-remembered after a reboot. `RUN NOW (MANUAL)` remains available as an override.
+stability period is adjustable from 5 to 300 seconds under the expandable technical
+details and is remembered after a reboot. `ISO ... nu toepassen` remains available
+as an override only while a valid light value, mapping and Darkroom connection exist.
+The bottom-right footer shows the installed version and the local installation date
+and time, so an operator can immediately verify which build is active on a booth.
+
+## ISO profiles
+
+ISO mapping now belongs to the Windows application, not to the ESP. The default
+profile is defined once in the released application and is therefore identical on
+all booths. A booth can switch to a custom profile; that custom mapping is stored
+only on that booth. Selecting or editing a profile has no effect until the operator
+chooses `Opslaan en activeren`. The editor shows both a table and a graphical preview.
+Ranges always connect, cover the complete 0–100 light scale and support ISO 100
+through 25600.
+
+Serial-port discovery and Darkroom status inspection run on background threads.
+Slow COM ports or an unresponsive Darkroom control therefore no longer block the
+Windows message loop or make the application show `Not responding`.
 
 ## Updating booths
 
 After initial setup no manual PC update is needed. The updater:
 
-1. checks GitHub every 30 minutes;
+1. checks GitHub immediately at Windows sign-in and then every 30 minutes;
 2. downloads the newest allowed release;
 3. verifies the installer SHA-256 checksum;
 4. installs it silently;
-5. restarts the overlay and updater.
+5. restarts the tray application and updater.
+
+The default ISO profile ships inside that verified release. Publishing a new stable
+release from the central PC therefore distributes both software changes and a changed
+default profile to every online booth. Changing settings through the UI on one booth
+does not publish them to the other booths; central defaults must be changed in the
+release source and published as a newer release. Booth-specific custom profiles remain
+local.
 
 ESP firmware is included in every release. Firmware deployment remains a
 separate OTA or USB action because a booth PC may not be connected to the ESP

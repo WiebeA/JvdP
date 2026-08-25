@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.IO.Ports;
 using Microsoft.Win32;
@@ -19,11 +20,27 @@ namespace Jvdp.LightDarkroomOverlay
     {
         public readonly object Sync = new object();
         public int Light = -1;
-        public int Raw = -1;
-        public int TargetIso = -1;
+        public int MappedIso = -1;
         public DateTime CandidateSince = DateTime.MinValue;
         public string SerialStatus = "Searching for ESP...";
         public string LastSerialError = "";
+    }
+
+    internal sealed class IsoBand
+    {
+        public int MaximumLight;
+        public int Iso;
+
+        public IsoBand(int maximumLight, int iso)
+        {
+            MaximumLight = maximumLight;
+            Iso = iso;
+        }
+
+        public IsoBand Clone()
+        {
+            return new IsoBand(MaximumLight, Iso);
+        }
     }
 
     internal enum OverlayButtonIcon
@@ -124,6 +141,219 @@ namespace Jvdp.LightDarkroomOverlay
         }
     }
 
+    internal sealed class LightRangeControl : Control
+    {
+        private List<IsoBand> bands = new List<IsoBand>();
+        private int lightValue = -1;
+        private int activeIso = -1;
+        private bool dragging;
+        private float visualScale = 1f;
+
+        public bool Interactive { get; set; }
+
+        public float VisualScale
+        {
+            get { return visualScale; }
+            set
+            {
+                visualScale = Math.Max(1f, Math.Min(1.3f, value));
+                Invalidate();
+            }
+        }
+
+        public int LightValue
+        {
+            get { return lightValue; }
+        }
+
+        public event EventHandler LightValueChanged;
+
+        public LightRangeControl()
+        {
+            BackColor = Color.White;
+            AccessibleRole = AccessibleRole.Graphic;
+            AccessibleName = "Licht naar ISO-bereiken";
+            SetStyle(ControlStyles.UserPaint |
+                     ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (!Interactive || e.Button != MouseButtons.Left)
+                return;
+            dragging = true;
+            Capture = true;
+            SetInteractiveLightValue(e.X);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (Interactive && dragging)
+                SetInteractiveLightValue(e.X);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (!Interactive || e.Button != MouseButtons.Left)
+                return;
+            SetInteractiveLightValue(e.X);
+            dragging = false;
+            Capture = false;
+        }
+
+        private void SetInteractiveLightValue(int mouseX)
+        {
+            int barLeft = 19;
+            int barRight = Math.Max(barLeft + 1, ClientSize.Width - 19);
+            int value = (int)Math.Round(
+                100.0 * (mouseX - barLeft) / (barRight - barLeft));
+            value = Math.Max(0, Math.Min(100, value));
+            if (value == lightValue)
+                return;
+            lightValue = value;
+            Invalidate();
+            EventHandler handler = LightValueChanged;
+            if (handler != null)
+                handler(this, EventArgs.Empty);
+        }
+
+        public void UpdateData(List<IsoBand> source, int light, int iso)
+        {
+            bands = new List<IsoBand>();
+            foreach (IsoBand band in source)
+                bands.Add(band.Clone());
+            lightValue = light;
+            activeIso = iso;
+            AccessibleDescription = light >= 0 && iso > 0
+                ? "Lichtwaarde " + light + " wordt ISO " + iso + "."
+                : "Er is nog geen geldige lichtmeting.";
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode =
+                System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            if (bands.Count == 0)
+                return;
+
+            Rectangle content = new Rectangle(1, 1,
+                Math.Max(1, ClientSize.Width - 2),
+                Math.Max(1, ClientSize.Height - 2));
+            using (Pen border = new Pen(Color.FromArgb(218, 222, 229)))
+                e.Graphics.DrawRectangle(border, content);
+
+            int cellWidth = Math.Max(1, content.Width / bands.Count);
+            int lower = 0;
+            int activeIndex = -1;
+            using (Font rangeFont = new Font(
+                "Segoe UI", 9.5f * visualScale, FontStyle.Bold))
+            using (Font isoFont = new Font(
+                "Segoe UI", 9f * visualScale, FontStyle.Regular))
+            {
+                for (int index = 0; index < bands.Count; index++)
+                {
+                    IsoBand band = bands[index];
+                    int left = content.Left + index * cellWidth;
+                    int right = index == bands.Count - 1
+                        ? content.Right
+                        : left + cellWidth;
+                    Rectangle cell = new Rectangle(left, content.Top,
+                        Math.Max(1, right - left), content.Height);
+                    bool active = lightValue >= lower &&
+                        lightValue <= band.MaximumLight;
+                    if (active)
+                    {
+                        activeIndex = index;
+                        using (SolidBrush highlight = new SolidBrush(
+                            Color.FromArgb(236, 245, 255)))
+                            e.Graphics.FillRectangle(highlight, cell);
+                    }
+                    if (index > 0)
+                    {
+                        using (Pen divider = new Pen(
+                            Color.FromArgb(218, 222, 229)))
+                            e.Graphics.DrawLine(divider, left, content.Top,
+                                left, content.Bottom);
+                    }
+                    Color rangeColor = active
+                        ? Color.FromArgb(20, 102, 196)
+                        : Color.FromArgb(62, 68, 77);
+                    TextRenderer.DrawText(e.Graphics,
+                        lower + "–" + band.MaximumLight, rangeFont,
+                        new Rectangle(left + 4,
+                            content.Top + (int)Math.Round(8 * visualScale),
+                            Math.Max(1, right - left - 8),
+                            (int)Math.Round(24 * visualScale)),
+                        rangeColor, TextFormatFlags.HorizontalCenter |
+                        TextFormatFlags.VerticalCenter |
+                        TextFormatFlags.NoPadding);
+                    TextRenderer.DrawText(e.Graphics,
+                        "ISO " + band.Iso, isoFont,
+                        new Rectangle(left + 4,
+                            content.Top + (int)Math.Round(34 * visualScale),
+                            Math.Max(1, right - left - 8),
+                            (int)Math.Round(23 * visualScale)),
+                        active ? Color.FromArgb(20, 102, 196) :
+                            Color.FromArgb(101, 108, 118),
+                        TextFormatFlags.HorizontalCenter |
+                        TextFormatFlags.VerticalCenter |
+                        TextFormatFlags.NoPadding);
+                    lower = band.MaximumLight + 1;
+                }
+            }
+
+            int barY = content.Bottom - (int)Math.Round(19 * visualScale);
+            int barLeft = content.Left + (int)Math.Round(18 * visualScale);
+            int barRight = content.Right - (int)Math.Round(18 * visualScale);
+            using (Pen baseBar = new Pen(
+                Color.FromArgb(190, 196, 204), 5f * visualScale))
+            {
+                baseBar.StartCap = System.Drawing.Drawing2D.LineCap.Round;
+                baseBar.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                e.Graphics.DrawLine(baseBar, barLeft, barY, barRight, barY);
+            }
+            if (activeIndex >= 0)
+            {
+                int segmentLeft = barLeft +
+                    (barRight - barLeft) * activeIndex / bands.Count;
+                int segmentRight = barLeft +
+                    (barRight - barLeft) * (activeIndex + 1) / bands.Count;
+                using (Pen activeBar = new Pen(
+                    Color.FromArgb(31, 111, 235), 5f * visualScale))
+                {
+                    activeBar.StartCap = System.Drawing.Drawing2D.LineCap.Round;
+                    activeBar.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                    e.Graphics.DrawLine(activeBar, segmentLeft, barY,
+                        segmentRight, barY);
+                }
+            }
+            if (lightValue >= 0)
+            {
+                int markerX = barLeft + (int)Math.Round(
+                    (barRight - barLeft) * Math.Max(0,
+                        Math.Min(100, lightValue)) / 100.0);
+                int markerRadius = (int)Math.Round(
+                    (Interactive ? 11 : 8) * visualScale);
+                using (SolidBrush marker = new SolidBrush(
+                    Color.FromArgb(31, 111, 235)))
+                    e.Graphics.FillEllipse(marker, markerX - markerRadius,
+                        barY - markerRadius, markerRadius * 2,
+                        markerRadius * 2);
+                using (Pen whiteRing = new Pen(Color.White, 2f))
+                    e.Graphics.DrawEllipse(whiteRing,
+                        markerX - markerRadius, barY - markerRadius,
+                        markerRadius * 2, markerRadius * 2);
+            }
+        }
+    }
+
     internal sealed class OverlayForm : Form
     {
         private const int HotkeyTogglePause = 1;
@@ -131,6 +361,7 @@ namespace Jvdp.LightDarkroomOverlay
         private const uint ModAlt = 0x0001;
         private const uint ModControl = 0x0002;
         private const int WmHotkey = 0x0312;
+        private const int WmActivateExistingInstance = 0x8001;
         private const uint WmCommand = 0x0111;
         private const int DarkroomSettingsToolId = 0x0294;
         private const int DarkroomNextSettingsToolId = 0x0296;
@@ -138,6 +369,9 @@ namespace Jvdp.LightDarkroomOverlay
         private const int DarkroomToolbarControlId = 4083;
         private const int DarkroomCommandStartBooth = 0x83F0;
         private static readonly string BuildTag = BuildInfo.Version;
+        private const string DefaultCoverTitle = "Please wait!";
+        private const string DefaultCoverMessage =
+            "I'm fine-tuning the lighting\r\nso you look absolutely amazing!";
         private const uint EventSystemForeground = 0x0003;
         private const uint EventSystemPopupStart = 0x0006;
         private const uint EventObjectShow = 0x8002;
@@ -158,11 +392,16 @@ namespace Jvdp.LightDarkroomOverlay
 
         private readonly SensorState sensor = new SensorState();
         private readonly System.Windows.Forms.Timer uiTimer;
-        private readonly System.Windows.Forms.Timer reconnectTimer;
+        private System.Threading.Timer reconnectTimer;
+        private System.Threading.Timer darkroomProbeTimer;
         private readonly NotifyIcon trayIcon;
         private readonly Label modeLabel;
+        private readonly Button statusButton;
+        private readonly Panel statusPanel;
+        private readonly Label statusPanelTitle;
+        private readonly Label statusPanelMessage;
+        private readonly Button statusPanelToggleButton;
         private readonly Label lightLabel;
-        private readonly Label rawLabel;
         private readonly Label targetIsoLabel;
         private readonly Label serialLabel;
         private readonly Label darkroomLabel;
@@ -174,8 +413,32 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly Panel progressFill;
         private readonly Button runActionButton;
         private readonly Button coverToggleButton;
+        private readonly ComboBox mappingModeInput;
+        private readonly Button mappingSettingsButton;
+        private readonly Label mappingSummaryLabel;
+        private readonly Label overallStatusLabel;
+        private readonly Label activeRangeLabel;
+        private readonly Label lastMeasuredLabel;
+        private readonly Label profileNameLabel;
+        private readonly Label detailsSummaryLabel;
+        private readonly Button pauseButton;
+        private readonly Button detailsToggleButton;
+        private readonly Panel detailsPanel;
+        private readonly LightRangeControl rangeControl;
+        private readonly TableLayoutPanel metrics;
+        private readonly FlowLayoutPanel dashboard;
+        private readonly Label versionFooterLabel;
+        private readonly Button settingsButton;
+        private IsoMappingForm settingsPage;
+        private readonly ToolStripMenuItem trayStatusMenuItem;
+        private readonly ToolStripMenuItem trayPauseMenuItem;
+        private readonly ToolStripMenuItem trayApplyMenuItem;
 
         private SerialPort serial;
+        private readonly object serialSync = new object();
+        private int reconnectActive;
+        private int serialFaulted;
+        private volatile bool serialReady;
         private string activeSerialPort = "";
         private DateTime serialOpenedAt = DateTime.MinValue;
         private DateTime lastJvdpLineAt = DateTime.MinValue;
@@ -201,6 +464,8 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly string positionPath;
         private readonly string sizePath;
         private readonly string stabilityPath;
+        private readonly string coverTextPath;
+        private readonly string automaticStatePath;
         private readonly List<ActionCoverForm> actionCovers = new List<ActionCoverForm>();
         private ManualCoverControlForm manualCoverControl;
         private readonly System.Windows.Forms.Timer coverGuardTimer;
@@ -211,23 +476,57 @@ namespace Jvdp.LightDarkroomOverlay
         private IntPtr[] guardedCoverHandles = new IntPtr[0];
         private IntPtr guardedManualControlHandle = IntPtr.Zero;
         private int coverRaiseActive;
+        private readonly bool startInTray;
+        private bool exitRequested;
+        private volatile bool shuttingDown;
+        private readonly object mappingSync = new object();
+        private readonly object coverTextSync = new object();
+        private readonly object logSync = new object();
+        private readonly string mappingPath;
+        private bool useCustomMapping;
+        private List<IsoBand> customIsoBands;
+        private bool updatingMappingControls;
+        private int darkroomProbeActive;
+        private bool useCustomCoverText;
+        private string customCoverTitle = DefaultCoverTitle;
+        private string customCoverMessage = DefaultCoverMessage;
+        private readonly Dictionary<Control, float> responsiveFontSizes =
+            new Dictionary<Control, float>();
+        private readonly Dictionary<Control, Rectangle>
+            responsiveDashboardBounds =
+                new Dictionary<Control, Rectangle>();
+        private readonly Dictionary<Control, Padding>
+            responsiveDashboardMargins =
+                new Dictionary<Control, Padding>();
+        private float lastResponsiveScale = -1f;
 
-        public OverlayForm()
+        private static readonly int[] SupportedIsoValues = {
+            100, 125, 160, 200, 250, 320, 400, 500, 640, 800,
+            1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000,
+            6400, 8000, 10000, 12800, 25600
+        };
+
+        public OverlayForm(bool startMinimizedToTray)
         {
-            Text = "JvdP Light → Darkroom Observer";
-            Text = "JvdP Light to Darkroom";
-            Width = 500;
-            Height = 650;
-            MinimumSize = new Size(450, 640);
+            Text = "JvdP Lichtregeling";
+            Icon applicationIcon = Icon.ExtractAssociatedIcon(
+                Application.ExecutablePath);
+            Icon = applicationIcon ?? SystemIcons.Information;
             AutoScaleMode = AutoScaleMode.Dpi;
-            FormBorderStyle = FormBorderStyle.None;
+            FormBorderStyle = FormBorderStyle.Sizable;
+            ClientSize = new Size(1240, 820);
+            MinimumSize = SizeFromClientSize(new Size(1000, 720));
             StartPosition = FormStartPosition.Manual;
-            TopMost = true;
+            MaximizeBox = true;
+            MinimizeBox = true;
+            TopMost = false;
             ShowInTaskbar = true;
-            BackColor = Color.FromArgb(13, 17, 23);
-            ForeColor = Color.White;
+            BackColor = Color.FromArgb(247, 248, 250);
+            ForeColor = Color.FromArgb(31, 35, 40);
+            Font = new Font("Segoe UI", 10, FontStyle.Regular);
             Opacity = 1.0;
             DoubleBuffered = true;
+            startInTray = startMinimizedToTray;
 
             string localRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -237,297 +536,542 @@ namespace Jvdp.LightDarkroomOverlay
             positionPath = Path.Combine(localRoot, "overlay-position.txt");
             sizePath = Path.Combine(localRoot, "overlay-size.txt");
             stabilityPath = Path.Combine(localRoot, "stability-seconds.txt");
+            mappingPath = Path.Combine(localRoot, "iso-mapping.txt");
+            coverTextPath = Path.Combine(localRoot, "fullpage-text.txt");
+            automaticStatePath = Path.Combine(
+                localRoot, "automatic-adjustment-state.txt");
             stabilitySeconds = LoadStabilitySeconds();
+            paused = LoadAutomaticAdjustmentStopped();
+            customIsoBands = CreateDefaultIsoBands();
+            LoadIsoMappingSettings();
+            LoadCoverTextSettings();
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            Size preferredSize = new Size(
+                Math.Min(1240, Math.Max(1000, area.Width - 48)),
+                Math.Min(820, Math.Max(720, area.Height - 48)));
+            ClientSize = preferredSize;
             Size savedSize;
             if (TryLoadOverlaySize(out savedSize))
-                Size = new Size(
-                    Math.Max(savedSize.Width, 450),
-                    Math.Max(savedSize.Height, 640));
-            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+                ClientSize = new Size(
+                    Math.Min(Math.Max(preferredSize.Width, savedSize.Width),
+                        Math.Max(1000, area.Width - 24)),
+                    Math.Min(Math.Max(preferredSize.Height, savedSize.Height),
+                        Math.Max(720, area.Height - 24)));
             Point initialLocation = new Point(
-                area.Right - Width - 18, area.Top + 18);
+                area.Left + (area.Width - Width) / 2,
+                area.Top + (area.Height - Height) / 2);
             Point savedLocation;
             if (TryLoadOverlayPosition(out savedLocation))
                 initialLocation = savedLocation;
+            initialLocation = new Point(
+                Math.Max(area.Left,
+                    Math.Min(initialLocation.X, area.Right - Width)),
+                Math.Max(area.Top,
+                    Math.Min(initialLocation.Y, area.Bottom - Height)));
             Location = initialLocation;
+            WindowState = FormWindowState.Maximized;
+
+            Panel header = new Panel();
+            header.BackColor = Color.White;
+            header.SetBounds(0, 0, ClientSize.Width, 64);
+            header.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            Controls.Add(header);
 
             Label title = MakeLabel(
-                "JvdP LIGHT", 18, FontStyle.Bold,
-                Color.FromArgb(232, 238, 245));
-            title.SetBounds(14, 7, 260, 48);
-            title.Cursor = Cursors.SizeAll;
-            title.MouseDown += BeginOverlayDrag;
-            Controls.Add(title);
-            MouseDown += BeginOverlayDrag;
-            Move += delegate { SaveOverlayPosition(); };
-            Resize += delegate { SaveOverlaySize(); };
+                "JvdP Lichtregeling", 18, FontStyle.Bold,
+                Color.FromArgb(18, 22, 27));
+            title.SetBounds(24, 8, 270, 48);
+            header.Controls.Add(title);
+
+            settingsButton = MakeLightButton("Instellingen", false);
+            settingsButton.AccessibleName = "Profielinstellingen openen";
+            settingsButton.SetBounds(header.Width - 264, 12, 240, 40);
+            settingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            settingsButton.Click += delegate
+            {
+                if (settingsPage != null && !settingsPage.IsDisposed)
+                {
+                    settingsPage.DialogResult = DialogResult.Cancel;
+                    settingsPage.Close();
+                }
+                else
+                {
+                    ShowIsoMappingSettings();
+                }
+            };
+            header.Controls.Add(settingsButton);
 
             modeLabel = MakeLabel(
-                "OBSERVE ONLY", 10, FontStyle.Bold, Color.Black);
-            modeLabel.BackColor = Color.FromArgb(81, 216, 138);
-            modeLabel.TextAlign = ContentAlignment.MiddleCenter;
-            modeLabel.SetBounds(ClientSize.Width - 254, 14, 110, 34);
-            modeLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            Controls.Add(modeLabel);
+                "Automatisch actief", 10, FontStyle.Bold,
+                Color.FromArgb(31, 111, 235));
+            modeLabel.TextAlign = ContentAlignment.MiddleRight;
+            modeLabel.Visible = false;
 
-            Button minimizeButton = MakeWindowButton(OverlayButtonIcon.Minimize);
-            minimizeButton.AccessibleName = "Minimize";
-            minimizeButton.SetBounds(ClientSize.Width - 92, 14, 34, 34);
-            minimizeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            minimizeButton.Click += delegate
+            overallStatusLabel = MakeLabel(
+                "Bezig met verbinden", 10, FontStyle.Bold,
+                Color.FromArgb(137, 87, 0));
+            overallStatusLabel.TextAlign = ContentAlignment.MiddleRight;
+            overallStatusLabel.AccessibleName = "Algemene systeemstatus";
+            overallStatusLabel.Visible = false;
+
+            statusButton = MakeLightButton("Bezig met verbinden", false);
+            statusButton.AccessibleName = "Status en bediening openen";
+            statusButton.SetBounds((header.Width - 220) / 2, 12, 220, 40);
+            statusButton.Anchor = AnchorStyles.Top;
+            statusButton.Click += delegate { ToggleStatusPanel(); };
+            header.Controls.Add(statusButton);
+            header.SizeChanged += delegate
             {
-                WindowState = FormWindowState.Minimized;
+                statusButton.Left =
+                    Math.Max(270, (header.ClientSize.Width -
+                        statusButton.Width) / 2);
             };
-            Controls.Add(minimizeButton);
 
-            Button closeButton = MakeWindowButton(OverlayButtonIcon.Close);
-            closeButton.AccessibleName = "Close";
-            closeButton.SetBounds(ClientSize.Width - 50, 14, 34, 34);
-            closeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            closeButton.Click += delegate { Close(); };
-            Controls.Add(closeButton);
-            minimizeButton.BringToFront();
-            closeButton.BringToFront();
+            Panel headerDivider = new Panel();
+            headerDivider.BackColor = Color.FromArgb(218, 222, 229);
+            headerDivider.SetBounds(0, 63, header.Width, 1);
+            headerDivider.Anchor = AnchorStyles.Left | AnchorStyles.Right |
+                AnchorStyles.Bottom;
+            header.Controls.Add(headerDivider);
+
+            ResizeEnd += delegate
+            {
+                SaveOverlayPosition();
+                SaveOverlaySize();
+            };
+            Resize += delegate
+            {
+                HideInTrayWhenMinimized();
+                PositionStatusPanel();
+                ApplyResponsiveTypography();
+            };
+
+            dashboard = new FlowLayoutPanel();
+            dashboard.FlowDirection = FlowDirection.TopDown;
+            dashboard.WrapContents = false;
+            dashboard.AutoScroll = true;
+            dashboard.Padding = new Padding(24, 18, 24, 18);
+            dashboard.BackColor = BackColor;
+            dashboard.SetBounds(0, 64, ClientSize.Width,
+                Math.Max(1, ClientSize.Height - 92));
+            dashboard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom |
+                AnchorStyles.Left | AnchorStyles.Right;
+            Controls.Add(dashboard);
+
+            versionFooterLabel = MakeLabel(
+                BuildVersionFooterText(localRoot), 8.5f, FontStyle.Regular,
+                Color.FromArgb(99, 108, 118));
+            versionFooterLabel.TextAlign = ContentAlignment.MiddleRight;
+            versionFooterLabel.SetBounds(24, ClientSize.Height - 28,
+                ClientSize.Width - 48, 24);
+            versionFooterLabel.Anchor = AnchorStyles.Bottom |
+                AnchorStyles.Left | AnchorStyles.Right;
+            versionFooterLabel.AccessibleName =
+                "Geïnstalleerde softwareversie";
+            versionFooterLabel.AccessibleDescription =
+                "Datum en tijd waarop deze versie is geïnstalleerd.";
+            Controls.Add(versionFooterLabel);
+
+            int sectionWidth = Math.Max(640, dashboard.ClientSize.Width - 68);
+            Panel mappingPanel = MakeLightSurface(sectionWidth, 264);
+            mappingPanel.Margin = new Padding(0, 0, 0, 12);
+            dashboard.Controls.Add(mappingPanel);
+
+            Label mappingTitle = MakeLabel(
+                "Live lichtwaarde → Doel-ISO", 13, FontStyle.Regular,
+                Color.FromArgb(31, 35, 40));
+            mappingTitle.SetBounds(20, 10, 370, 34);
+            mappingPanel.Controls.Add(mappingTitle);
+
+            lastMeasuredLabel = MakeLabel(
+                "Wachten op eerste meting", 9, FontStyle.Regular,
+                Color.FromArgb(99, 108, 118));
+            lastMeasuredLabel.TextAlign = ContentAlignment.MiddleRight;
+            lastMeasuredLabel.SetBounds(mappingPanel.Width - 300, 10, 280, 34);
+            lastMeasuredLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            mappingPanel.Controls.Add(lastMeasuredLabel);
+
+            rangeControl = new LightRangeControl();
+            rangeControl.SetBounds(20, 48, mappingPanel.Width - 40, 100);
+            rangeControl.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            mappingPanel.Controls.Add(rangeControl);
+
+            metrics = new TableLayoutPanel();
+            metrics.ColumnCount = 3;
+            metrics.RowCount = 2;
+            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
+            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+            metrics.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+            metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            metrics.SetBounds(20, 158, mappingPanel.Width - 40, 88);
+            metrics.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            mappingPanel.Controls.Add(metrics);
 
             Label lightCaption = MakeLabel(
-                "LIVE LIGHT", 9, FontStyle.Bold, Color.FromArgb(139, 148, 158));
-            lightCaption.SetBounds(20, 62, 150, 24);
-            Controls.Add(lightCaption);
+                "Lichtwaarde", 10, FontStyle.Regular,
+                Color.FromArgb(54, 65, 82));
+            lightCaption.TextAlign = ContentAlignment.MiddleCenter;
+            metrics.Controls.Add(lightCaption, 0, 0);
+            lightCaption.Dock = DockStyle.Fill;
 
-            lightLabel = MakeLabel(
-                "—", 44, FontStyle.Bold, Color.FromArgb(247, 201, 72));
-            lightLabel.SetBounds(18, 86, 200, 96);
-            Controls.Add(lightLabel);
-
-            rawLabel = MakeLabel(
-                "Raw: —", 10, FontStyle.Regular, Color.FromArgb(139, 148, 158));
-            rawLabel.SetBounds(20, 184, 180, 24);
-            Controls.Add(rawLabel);
+            Label rangeCaption = MakeLabel(
+                "Actief bereik", 10, FontStyle.Regular,
+                Color.FromArgb(54, 65, 82));
+            rangeCaption.TextAlign = ContentAlignment.MiddleCenter;
+            metrics.Controls.Add(rangeCaption, 1, 0);
+            rangeCaption.Dock = DockStyle.Fill;
 
             Label targetCaption = MakeLabel(
-                "TARGET ISO", 9, FontStyle.Bold, Color.FromArgb(139, 148, 158));
-            targetCaption.SetBounds(ClientSize.Width - 192, 62, 150, 24);
-            targetCaption.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            Controls.Add(targetCaption);
+                "Doel-ISO", 10, FontStyle.Regular,
+                Color.FromArgb(54, 65, 82));
+            targetCaption.TextAlign = ContentAlignment.MiddleCenter;
+            metrics.Controls.Add(targetCaption, 2, 0);
+            targetCaption.Dock = DockStyle.Fill;
+
+            lightLabel = MakeLabel(
+                "—", 30, FontStyle.Bold, Color.FromArgb(31, 111, 235));
+            lightLabel.TextAlign = ContentAlignment.MiddleCenter;
+            lightLabel.Dock = DockStyle.Fill;
+            lightLabel.AccessibleName = "Actuele lichtwaarde";
+            metrics.Controls.Add(lightLabel, 0, 1);
+
+            activeRangeLabel = MakeLabel(
+                "—", 23, FontStyle.Bold, Color.FromArgb(31, 111, 235));
+            activeRangeLabel.TextAlign = ContentAlignment.MiddleCenter;
+            activeRangeLabel.Dock = DockStyle.Fill;
+            activeRangeLabel.AccessibleName = "Actief lichtbereik";
+            metrics.Controls.Add(activeRangeLabel, 1, 1);
 
             targetIsoLabel = MakeLabel(
-                "—", 29, FontStyle.Bold, Color.FromArgb(121, 192, 255));
-            targetIsoLabel.SetBounds(ClientSize.Width - 204, 86, 180, 96);
-            targetIsoLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            Controls.Add(targetIsoLabel);
+                "—", 30, FontStyle.Bold, Color.FromArgb(31, 111, 235));
+            targetIsoLabel.TextAlign = ContentAlignment.MiddleCenter;
+            targetIsoLabel.Dock = DockStyle.Fill;
+            targetIsoLabel.AccessibleName = "Doel ISO";
+            metrics.Controls.Add(targetIsoLabel, 2, 1);
 
-            AddSeparator(214);
-            serialLabel = AddStatusRow("ESP / SERIAL", 228);
-            darkroomLabel = AddStatusRow("DARKROOM", 256);
-            boothLabel = AddStatusRow("BOOTH MODE", 284);
-            currentIsoLabel = AddStatusRow("CURRENT DRB ISO", 312);
+            mappingModeInput = new ComboBox();
+            mappingModeInput.Items.Add("Standaard · alle booths");
+            mappingModeInput.Items.Add("Eigen · deze booth");
+            mappingModeInput.Visible = false;
+            mappingSummaryLabel = MakeLabel(
+                "", 9, FontStyle.Regular, Color.FromArgb(99, 108, 118));
+            mappingSummaryLabel.Visible = false;
+
+            Panel profilePanel = MakeLightSurface(sectionWidth, 62);
+            profilePanel.Margin = new Padding(0, 0, 0, 10);
+            dashboard.Controls.Add(profilePanel);
+            Label profileCaption = MakeLabel(
+                "Actief profiel", 9, FontStyle.Regular,
+                Color.FromArgb(99, 108, 118));
+            profileCaption.SetBounds(18, 7, 180, 22);
+            profilePanel.Controls.Add(profileCaption);
+            profileNameLabel = MakeLabel(
+                "Standaard · alle booths", 11, FontStyle.Bold,
+                Color.FromArgb(31, 35, 40));
+            profileNameLabel.SetBounds(18, 27, profilePanel.Width - 210, 28);
+            profileNameLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            profilePanel.Controls.Add(profileNameLabel);
+            mappingSettingsButton = MakeLightButton("Profiel bekijken", false);
+            mappingSettingsButton.SetBounds(profilePanel.Width - 172, 10, 154, 42);
+            mappingSettingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            mappingSettingsButton.Click += delegate { ShowIsoMappingSettings(); };
+            profilePanel.Controls.Add(mappingSettingsButton);
+
+            Panel detailsHeader = MakeLightSurface(sectionWidth, 52);
+            detailsHeader.Margin = new Padding(0, 0, 0, 4);
+            dashboard.Controls.Add(detailsHeader);
+            detailsToggleButton = MakeLightButton(
+                "Verbindingen en technische details", false);
+            detailsToggleButton.FlatAppearance.BorderSize = 0;
+            detailsToggleButton.TextAlign = ContentAlignment.MiddleLeft;
+            detailsToggleButton.SetBounds(10, 5,
+                Math.Min(360, detailsHeader.Width - 300), 42);
+            detailsToggleButton.AccessibleDescription =
+                "Toont of verbergt technische verbindingsinformatie.";
+            detailsHeader.Controls.Add(detailsToggleButton);
+            detailsSummaryLabel = MakeLabel(
+                "Sensor zoeken · Darkroom zoeken", 9, FontStyle.Regular,
+                Color.FromArgb(99, 108, 118));
+            detailsSummaryLabel.TextAlign = ContentAlignment.MiddleRight;
+            detailsSummaryLabel.SetBounds(detailsHeader.Width - 390, 5, 372, 42);
+            detailsSummaryLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            detailsHeader.Controls.Add(detailsSummaryLabel);
+
+            detailsPanel = MakeLightSurface(sectionWidth, 148);
+            detailsPanel.Margin = new Padding(0, 0, 0, 8);
+            detailsPanel.Visible = false;
+            dashboard.Controls.Add(detailsPanel);
+
+            AddLightDetailCaption(detailsPanel, "Lichtsensor", 18, 10);
+            serialLabel = MakeLabel(
+                "Sensor zoeken", 10, FontStyle.Bold,
+                Color.FromArgb(137, 87, 0));
+            serialLabel.SetBounds(160, 10, detailsPanel.Width / 2 - 178, 28);
+            detailsPanel.Controls.Add(serialLabel);
+            AddLightDetailCaption(detailsPanel, "Darkroom", 18, 42);
+            darkroomLabel = MakeLabel(
+                "Niet actief", 10, FontStyle.Bold,
+                Color.FromArgb(186, 36, 36));
+            darkroomLabel.SetBounds(160, 42, detailsPanel.Width / 2 - 178, 28);
+            detailsPanel.Controls.Add(darkroomLabel);
+
+            int rightDetail = detailsPanel.Width / 2 + 10;
+            AddLightDetailCaption(detailsPanel, "Automatisch aanpassen",
+                rightDetail, 10);
+            boothLabel = MakeLabel(
+                "Niet actief", 10, FontStyle.Bold,
+                Color.FromArgb(186, 36, 36));
+            boothLabel.SetBounds(rightDetail + 175, 10,
+                detailsPanel.Width - rightDetail - 193, 28);
+            boothLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            detailsPanel.Controls.Add(boothLabel);
+            AddLightDetailCaption(detailsPanel, "ISO in Darkroom",
+                rightDetail, 42);
+            currentIsoLabel = MakeLabel(
+                "Onbekend", 10, FontStyle.Bold,
+                Color.FromArgb(99, 108, 118));
+            currentIsoLabel.SetBounds(rightDetail + 175, 42,
+                detailsPanel.Width - rightDetail - 193, 28);
+            currentIsoLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            detailsPanel.Controls.Add(currentIsoLabel);
 
             Label stabilityCaption = MakeLabel(
-                "STABILITY (SEC)", 9, FontStyle.Bold, Color.FromArgb(139, 148, 158));
-            stabilityCaption.SetBounds(20, 346, 120, 24);
-            Controls.Add(stabilityCaption);
-
+                "Wachttijd vóór aanpassen", 9, FontStyle.Regular,
+                Color.FromArgb(99, 108, 118));
+            stabilityCaption.SetBounds(18, 82, 170, 28);
+            detailsPanel.Controls.Add(stabilityCaption);
             stabilitySecondsInput = new NumericUpDown();
             stabilitySecondsInput.Minimum = 5;
             stabilitySecondsInput.Maximum = 300;
             stabilitySecondsInput.Increment = 5;
             stabilitySecondsInput.Value = stabilitySeconds;
-            stabilitySecondsInput.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            stabilitySecondsInput.ForeColor = Color.FromArgb(232, 238, 245);
-            stabilitySecondsInput.BackColor = Color.FromArgb(22, 27, 34);
+            stabilitySecondsInput.Font = new Font("Segoe UI", 10, FontStyle.Regular);
+            stabilitySecondsInput.ForeColor = Color.FromArgb(31, 35, 40);
+            stabilitySecondsInput.BackColor = Color.White;
             stabilitySecondsInput.BorderStyle = BorderStyle.FixedSingle;
             stabilitySecondsInput.TextAlign = HorizontalAlignment.Center;
-            stabilitySecondsInput.SetBounds(145, 345, 68, 25);
+            stabilitySecondsInput.SetBounds(190, 82, 72, 28);
+            stabilitySecondsInput.AccessibleName =
+                "Wachttijd voor automatisch aanpassen in seconden";
             stabilitySecondsInput.ValueChanged += delegate
             {
                 stabilitySeconds = (int)stabilitySecondsInput.Value;
                 SaveStabilitySeconds();
                 RefreshUi();
             };
-            Controls.Add(stabilitySecondsInput);
-
+            detailsPanel.Controls.Add(stabilitySecondsInput);
             countdownLabel = MakeLabel(
-                "0.0 / 30.0 s", 9, FontStyle.Bold, Color.FromArgb(201, 209, 217));
-            countdownLabel.TextAlign = ContentAlignment.MiddleRight;
-            countdownLabel.SetBounds(ClientSize.Width - 150, 346, 130, 24);
-            countdownLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            Controls.Add(countdownLabel);
-
+                "0,0 / 30,0 sec", 9, FontStyle.Regular,
+                Color.FromArgb(99, 108, 118));
+            countdownLabel.SetBounds(276, 82, 130, 28);
+            detailsPanel.Controls.Add(countdownLabel);
             Panel progressBack = new Panel();
-            progressBack.BackColor = Color.FromArgb(48, 54, 61);
-            progressBack.SetBounds(20, 372, ClientSize.Width - 40, 7);
-            progressBack.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            Controls.Add(progressBack);
-
+            progressBack.BackColor = Color.FromArgb(218, 222, 229);
+            progressBack.SetBounds(18, 121, detailsPanel.Width - 36, 6);
+            progressBack.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            detailsPanel.Controls.Add(progressBack);
             progressFill = new Panel();
-            progressFill.BackColor = Color.FromArgb(247, 201, 72);
-            progressFill.SetBounds(0, 0, 0, 7);
+            progressFill.BackColor = Color.FromArgb(31, 111, 235);
+            progressFill.SetBounds(0, 0, 0, 6);
             progressBack.Controls.Add(progressFill);
 
-            actionLabel = MakeLabel(
-                "Waiting for sensor data…", 10, FontStyle.Regular,
-                Color.FromArgb(201, 209, 217));
-            actionLabel.SetBounds(20, 390, ClientSize.Width - 40,
-                ClientSize.Height - 390 - 250);
-            actionLabel.Anchor = AnchorStyles.Top | AnchorStyles.Bottom |
-                AnchorStyles.Left | AnchorStyles.Right;
-            actionLabel.TextAlign = ContentAlignment.TopLeft;
-            actionLabel.Padding = new Padding(4, 8, 4, 8);
-            Controls.Add(actionLabel);
-
-            Panel phonePanel = new Panel();
-            phonePanel.BackColor = Color.FromArgb(22, 27, 34);
-            phonePanel.SetBounds(20, ClientSize.Height - 242,
-                ClientSize.Width - 40, 117);
-            phonePanel.Anchor = AnchorStyles.Bottom |
-                AnchorStyles.Left | AnchorStyles.Right;
-            Controls.Add(phonePanel);
-
-            Label phoneTitle = MakeLabel(
-                "PHONE CONNECTION", 9, FontStyle.Bold,
-                Color.FromArgb(232, 238, 245));
-            phoneTitle.SetBounds(12, 5, 220, 23);
-            phonePanel.Controls.Add(phoneTitle);
-
-            Label phoneHint = MakeLabel(
-                "Join Wi-Fi, then open the address", 8, FontStyle.Regular,
-                Color.FromArgb(139, 148, 158));
-            phoneHint.TextAlign = ContentAlignment.MiddleRight;
-            phoneHint.SetBounds(220, 5, phonePanel.Width - 232, 23);
-            phoneHint.Anchor = AnchorStyles.Top |
-                AnchorStyles.Left | AnchorStyles.Right;
-            phonePanel.Controls.Add(phoneHint);
-
-            AddConnectionRow(phonePanel, "WI-FI", PhoneHotspotSsid, 30, 42);
-
-            Label passwordCaption = MakeLabel(
-                "PASSWORD", 8, FontStyle.Bold,
-                Color.FromArgb(139, 148, 158));
-            passwordCaption.SetBounds(12, 56, 100, 24);
-            phonePanel.Controls.Add(passwordCaption);
-
-            Label passwordValue = MakeLabel(
-                new String('\u2022', 12), 9, FontStyle.Bold,
-                Color.FromArgb(201, 209, 217));
-            passwordValue.SetBounds(112, 56, phonePanel.Width - 274, 24);
-            passwordValue.Anchor = AnchorStyles.Top |
-                AnchorStyles.Left | AnchorStyles.Right;
-            phonePanel.Controls.Add(passwordValue);
-
-            Label eyeHint = MakeLabel(
-                "Show password", 8, FontStyle.Regular,
-                Color.FromArgb(139, 148, 158));
-            eyeHint.TextAlign = ContentAlignment.MiddleRight;
-            eyeHint.SetBounds(phonePanel.Width - 242, 54, 194, 28);
-            eyeHint.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            phonePanel.Controls.Add(eyeHint);
-
-            OverlayIconButton eyeButton =
-                new OverlayIconButton(OverlayButtonIcon.Eye);
-            eyeButton.AccessibleName = "Show password";
-            eyeButton.SetBounds(phonePanel.Width - 42, 54, 30, 28);
-            eyeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            bool passwordVisible = false;
-            eyeButton.Click += delegate
+            detailsToggleButton.Click += delegate
             {
-                passwordVisible = !passwordVisible;
-                passwordValue.Text = passwordVisible
-                    ? PhoneHotspotPassword
-                    : new String('\u2022', 12);
-                eyeButton.EyeSlashed = passwordVisible;
-                eyeButton.AccessibleName = passwordVisible
-                    ? "Hide password"
-                    : "Show password";
-                eyeHint.Text = passwordVisible
-                    ? "Hide password"
-                    : "Show password";
-                eyeButton.Invalidate();
+                detailsPanel.Visible = !detailsPanel.Visible;
+                detailsToggleButton.Text = detailsPanel.Visible
+                    ? "Technische details verbergen"
+                    : "Verbindingen en technische details";
+                detailsToggleButton.AccessibleDescription = detailsPanel.Visible
+                    ? "Technische verbindingsinformatie is zichtbaar."
+                    : "Technische verbindingsinformatie is verborgen.";
             };
-            phonePanel.Controls.Add(eyeButton);
 
-            AddConnectionRow(
-                phonePanel, "OPEN", PhoneDashboardAddress, 84, 12);
+            actionLabel = MakeLabel(
+                "Wachten op een lichtmeting van de sensor.", 10,
+                FontStyle.Regular, Color.FromArgb(71, 78, 88));
+            actionLabel.SetBounds(0, 0, sectionWidth, 32);
+            actionLabel.Margin = new Padding(0, 0, 0, 8);
+            actionLabel.TextAlign = ContentAlignment.MiddleLeft;
+            actionLabel.AccessibleName = "Actuele activiteit";
+            dashboard.Controls.Add(actionLabel);
 
-            runActionButton = new Button();
-            runActionButton.Text = "RUN NOW (MANUAL)";
-            runActionButton.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-            runActionButton.ForeColor = Color.White;
-            runActionButton.BackColor = Color.FromArgb(31, 111, 235);
-            runActionButton.FlatStyle = FlatStyle.Flat;
-            runActionButton.FlatAppearance.BorderSize = 0;
-            runActionButton.SetBounds(20, ClientSize.Height - 115,
-                ClientSize.Width - 40, 42);
-            runActionButton.Anchor = AnchorStyles.Bottom |
-                AnchorStyles.Left | AnchorStyles.Right;
+            TableLayoutPanel actionPanel = new TableLayoutPanel();
+            actionPanel.ColumnCount = 2;
+            actionPanel.RowCount = 1;
+            actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            actionPanel.SetBounds(0, 0, sectionWidth, 58);
+            actionPanel.Margin = new Padding(0);
+            dashboard.Controls.Add(actionPanel);
+
+            pauseButton = MakeLightButton(
+                "Automatisch aanpassen stoppen", false);
+            pauseButton.Dock = DockStyle.Fill;
+            pauseButton.Margin = new Padding(0, 0, 6, 0);
+            pauseButton.Click += delegate { TogglePause(); };
+            actionPanel.Controls.Add(pauseButton, 0, 0);
+
+            runActionButton = MakeLightButton("Doel-ISO nu toepassen", true);
+            runActionButton.Dock = DockStyle.Fill;
+            runActionButton.Margin = new Padding(6, 0, 0, 0);
             runActionButton.Click += delegate { StartTargetIsoAction(false); };
-            Controls.Add(runActionButton);
+            actionPanel.Controls.Add(runActionButton, 1, 0);
 
             coverToggleButton = new Button();
-            coverToggleButton.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-            coverToggleButton.ForeColor = Color.White;
-            coverToggleButton.FlatStyle = FlatStyle.Flat;
-            coverToggleButton.FlatAppearance.BorderSize = 0;
-            coverToggleButton.SetBounds(20, ClientSize.Height - 67,
-                ClientSize.Width - 40, 42);
-            coverToggleButton.Anchor = AnchorStyles.Bottom |
-                AnchorStyles.Left | AnchorStyles.Right;
-            coverToggleButton.Click += delegate { ToggleManualCover(); };
-            Controls.Add(coverToggleButton);
-            UpdateCoverToggleButton();
+            coverToggleButton.Visible = false;
 
-            Label resizeGrip = MakeLabel(
-                "◢", 11, FontStyle.Bold, Color.FromArgb(139, 148, 158));
-            resizeGrip.TextAlign = ContentAlignment.BottomRight;
-            resizeGrip.SetBounds(
-                ClientSize.Width - 18, ClientSize.Height - 18, 16, 16);
-            resizeGrip.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-            resizeGrip.Cursor = Cursors.SizeNWSE;
-            resizeGrip.MouseDown += BeginOverlayResize;
-            Controls.Add(resizeGrip);
-            resizeGrip.BringToFront();
+            dashboard.SizeChanged += delegate
+            {
+                int width = Math.Max(640,
+                    dashboard.ClientSize.Width - dashboard.Padding.Horizontal -
+                    (dashboard.VerticalScroll.Visible
+                        ? SystemInformation.VerticalScrollBarWidth : 0) - 20);
+                mappingPanel.Width = width;
+                profilePanel.Width = width;
+                detailsHeader.Width = width;
+                detailsPanel.Width = width;
+                actionLabel.Width = width;
+                actionPanel.Width = width;
+                float scale = GetResponsiveScale();
+                mappingTitle.Width = (int)Math.Round(370 * scale);
+                lastMeasuredLabel.Width = (int)Math.Round(280 * scale);
+                lastMeasuredLabel.Left = mappingPanel.Width -
+                    lastMeasuredLabel.Width - 20;
+                mappingSettingsButton.Width =
+                    (int)Math.Round(154 * scale);
+                mappingSettingsButton.Left = profilePanel.Width -
+                    mappingSettingsButton.Width - 18;
+                profileNameLabel.Width = Math.Max(220,
+                    mappingSettingsButton.Left - 36);
+                detailsToggleButton.Width = Math.Min(
+                    (int)Math.Round(360 * scale),
+                    Math.Max(360, detailsHeader.Width - 390));
+                detailsSummaryLabel.Width = Math.Min(
+                    (int)Math.Round(372 * scale),
+                    Math.Max(280, detailsHeader.Width -
+                        detailsToggleButton.Right - 36));
+                detailsSummaryLabel.Left = detailsHeader.Width -
+                    detailsSummaryLabel.Width - 18;
+                dashboard.PerformLayout();
+            };
+            UpdateMappingControls();
+
+            statusPanel = MakeLightSurface(500, 270);
+            statusPanel.Visible = false;
+            statusPanel.Padding = new Padding(22);
+            Controls.Add(statusPanel);
+
+            statusPanelTitle = MakeLabel(
+                "Systeemstatus", 17, FontStyle.Bold,
+                Color.FromArgb(31, 35, 40));
+            statusPanelTitle.SetBounds(22, 14, 390, 42);
+            statusPanel.Controls.Add(statusPanelTitle);
+
+            Button closeStatusButton = MakeLightButton("×", false);
+            closeStatusButton.Font = new Font("Segoe UI", 16, FontStyle.Regular);
+            closeStatusButton.AccessibleName = "Status sluiten";
+            closeStatusButton.SetBounds(statusPanel.Width - 58, 12, 42, 42);
+            closeStatusButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            closeStatusButton.Click += delegate { statusPanel.Visible = false; };
+            statusPanel.Controls.Add(closeStatusButton);
+
+            statusPanelMessage = MakeLabel(
+                "", 10, FontStyle.Regular, Color.FromArgb(71, 78, 88));
+            statusPanelMessage.SetBounds(22, 64,
+                statusPanel.Width - 44, 112);
+            statusPanelMessage.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            statusPanel.Controls.Add(statusPanelMessage);
+
+            statusPanelToggleButton = MakeLightButton(
+                "Automatisch aanpassen stoppen", false);
+            statusPanelToggleButton.SetBounds(22, 196,
+                statusPanel.Width - 44, 50);
+            statusPanelToggleButton.Anchor = AnchorStyles.Bottom |
+                AnchorStyles.Left | AnchorStyles.Right;
+            statusPanelToggleButton.Click += delegate { TogglePause(); };
+            statusPanel.Controls.Add(statusPanelToggleButton);
+            PositionStatusPanel();
 
             trayIcon = new NotifyIcon();
-            trayIcon.Icon = SystemIcons.Information;
-            trayIcon.Text = "JvdP Light to Darkroom";
-            trayIcon.Text = "JvdP Light → Darkroom Observer";
-            trayIcon.Text = "JvdP Light to Darkroom";
+            trayIcon.Icon = Icon;
+            trayIcon.Text = "JvdP Lichtregeling";
             trayIcon.Visible = true;
             ContextMenuStrip menu = new ContextMenuStrip();
-            menu.Items.Add("Show / hide overlay", null, delegate { Visible = !Visible; });
-            menu.Items.Add("Pause / observe", null, delegate { TogglePause(); });
+            menu.Font = new Font("Segoe UI", 10, FontStyle.Regular);
+            trayStatusMenuItem = new ToolStripMenuItem("Bezig met verbinden");
+            trayStatusMenuItem.Enabled = false;
+            menu.Items.Add(trayStatusMenuItem);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Exit observer", null, delegate { Close(); });
+            ToolStripMenuItem openMenuItem = new ToolStripMenuItem(
+                "Dashboard openen", null, delegate { ShowMainWindow(); });
+            openMenuItem.Font = new Font(openMenuItem.Font, FontStyle.Bold);
+            menu.Items.Add(openMenuItem);
+            trayPauseMenuItem = new ToolStripMenuItem(
+                "Automatisch aanpassen stoppen", null,
+                delegate { TogglePause(); });
+            menu.Items.Add(trayPauseMenuItem);
+            trayApplyMenuItem = new ToolStripMenuItem(
+                "Doel-ISO toepassen", null,
+                delegate { StartTargetIsoAction(false); });
+            trayApplyMenuItem.Enabled = false;
+            menu.Items.Add(trayApplyMenuItem);
+            menu.Items.Add("Profielinstellingen", null,
+                delegate { ShowIsoMappingSettings(); });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Afsluiten", null, delegate { ExitApplication(); });
             trayIcon.ContextMenuStrip = menu;
-            trayIcon.DoubleClick += delegate { Visible = !Visible; };
+            trayIcon.DoubleClick += delegate { ShowMainWindow(); };
 
             uiTimer = new System.Windows.Forms.Timer();
-            uiTimer.Interval = 250;
+            uiTimer.Interval = 500;
             uiTimer.Tick += delegate { RefreshUi(); };
             uiTimer.Start();
 
-            reconnectTimer = new System.Windows.Forms.Timer();
-            reconnectTimer.Interval = 2000;
-            reconnectTimer.Tick += delegate { EnsureSerialConnected(); };
-            reconnectTimer.Start();
-
             coverWinEventDelegate = CoverWinEvent;
             coverGuardTimer = new System.Windows.Forms.Timer();
-            coverGuardTimer.Interval = 15;
+            coverGuardTimer.Interval = 250;
             coverGuardTimer.Tick += delegate { RaiseFullscreenCovers(); };
+
+            CaptureResponsiveFonts(dashboard);
+            CaptureResponsiveDashboardLayout(dashboard);
+            ApplyResponsiveTypography();
 
             Shown += delegate
             {
                 RegisterHotKey(Handle, HotkeyTogglePause, ModControl | ModAlt, (uint)Keys.F9);
                 RegisterHotKey(Handle, HotkeyEmergencyPause, ModControl | ModAlt, (uint)Keys.F12);
-                EnsureSerialConnected();
+                StartBackgroundMonitors();
                 Log("Overlay started; build=" + BuildTag +
-                    "; automatic Darkroom actions enabled; stability=" +
+                    "; automatic Darkroom actions " +
+                    (paused ? "stopped" : "started") + "; stability=" +
                     stabilitySeconds + " seconds.");
+                if (startInTray)
+                    BeginInvoke(new MethodInvoker(HideInTray));
             };
 
-            FormClosing += delegate
+            FormClosing += delegate(object sender, FormClosingEventArgs args)
             {
+                Log("Window close requested; reason=" +
+                    args.CloseReason + "; exitRequested=" +
+                    exitRequested + ".");
+                if (!exitRequested &&
+                    (args.CloseReason == CloseReason.UserClosing ||
+                     args.CloseReason == CloseReason.None))
+                {
+                    args.Cancel = true;
+                    HideInTray();
+                    return;
+                }
+                shuttingDown = true;
                 StopCoverZOrderGuard();
+                StopBackgroundMonitors();
                 SaveOverlayPosition();
                 SaveOverlaySize();
                 UnregisterHotKey(Handle, HotkeyTogglePause);
@@ -539,56 +1083,223 @@ namespace Jvdp.LightDarkroomOverlay
             };
         }
 
-        protected override bool ShowWithoutActivation
+        private void CaptureResponsiveFonts(Control root)
         {
-            get { return true; }
+            if (root == null)
+                return;
+            if ((root is Label || root is Button ||
+                 root is NumericUpDown) &&
+                !responsiveFontSizes.ContainsKey(root))
+                responsiveFontSizes.Add(root, root.Font.Size);
+            foreach (Control child in root.Controls)
+                CaptureResponsiveFonts(child);
         }
 
-        protected override CreateParams CreateParams
+        private void ApplyResponsiveTypography()
         {
-            get
-            {
+            float scale = GetResponsiveScale();
+            if (Math.Abs(scale - lastResponsiveScale) < 0.025f)
+                return;
+            lastResponsiveScale = scale;
 
-                const int WsExToolWindow = 0x00000080;
-                const int WsExNoActivate = 0x08000000;
-                CreateParams parameters = base.CreateParams;
-                parameters.ExStyle |= WsExToolWindow | WsExNoActivate;
-                return parameters;
+            foreach (KeyValuePair<Control, float> item in
+                responsiveFontSizes)
+            {
+                if (item.Key == null || item.Key.IsDisposed)
+                    continue;
+                item.Key.Font = new Font(
+                    "Segoe UI", item.Value * scale,
+                    item.Key.Font.Style);
+            }
+            if (rangeControl != null)
+                rangeControl.VisualScale = scale;
+            if (metrics != null && metrics.RowStyles.Count > 0)
+                metrics.RowStyles[0].Height =
+                    (int)Math.Ceiling(31 * scale);
+
+            foreach (KeyValuePair<Control, Rectangle> item in
+                responsiveDashboardBounds)
+            {
+                Control control = item.Key;
+                if (control == null || control.IsDisposed ||
+                    control.Dock != DockStyle.None)
+                    continue;
+                Rectangle basis = item.Value;
+                if (control.Parent == dashboard)
+                {
+                    control.Height = (int)Math.Round(
+                        basis.Height * scale);
+                    Padding margin;
+                    if (responsiveDashboardMargins.TryGetValue(
+                        control, out margin))
+                        control.Margin = new Padding(
+                            margin.Left,
+                            (int)Math.Round(margin.Top * scale),
+                            margin.Right,
+                            (int)Math.Round(margin.Bottom * scale));
+                    continue;
+                }
+                control.Top = (int)Math.Round(basis.Top * scale);
+                control.Height = (int)Math.Round(basis.Height * scale);
+            }
+            dashboard.Padding = new Padding(
+                24, (int)Math.Round(18 * scale),
+                24, (int)Math.Round(18 * scale));
+            dashboard.PerformLayout();
+        }
+
+        private float GetResponsiveScale()
+        {
+            float widthScale = ClientSize.Width / 1100f;
+            float heightScale = ClientSize.Height / 720f;
+            return Math.Max(1f,
+                Math.Min(1.45f, Math.Min(widthScale, heightScale)));
+        }
+
+        private void CaptureResponsiveDashboardLayout(Control root)
+        {
+            if (root == null)
+                return;
+            foreach (Control child in root.Controls)
+            {
+                if (!responsiveDashboardBounds.ContainsKey(child))
+                {
+                    responsiveDashboardBounds.Add(child, child.Bounds);
+                    responsiveDashboardMargins.Add(child, child.Margin);
+                }
+                CaptureResponsiveDashboardLayout(child);
+            }
+        }
+
+        private void HideInTrayWhenMinimized()
+        {
+            if (WindowState == FormWindowState.Minimized)
+                HideInTray();
+        }
+
+        private void HideInTray()
+        {
+            ShowInTaskbar = false;
+            Hide();
+        }
+
+        private void ShowMainWindow()
+        {
+            ShowInTaskbar = true;
+            Show();
+            if (WindowState == FormWindowState.Minimized)
+                WindowState = FormWindowState.Normal;
+            BringToFront();
+            Activate();
+        }
+
+        private void ToggleStatusPanel()
+        {
+            statusPanel.Visible = !statusPanel.Visible;
+            if (statusPanel.Visible)
+            {
+                PositionStatusPanel();
+                statusPanel.BringToFront();
+                statusPanel.Focus();
+            }
+        }
+
+        private void PositionStatusPanel()
+        {
+            if (statusPanel == null)
+                return;
+            int width = Math.Min(500, Math.Max(420, ClientSize.Width - 48));
+            int height = 270;
+            statusPanel.SetBounds(
+                Math.Max(12, (ClientSize.Width - width) / 2),
+                64 + Math.Max(18, (ClientSize.Height - 64 - height) / 2),
+                width, height);
+        }
+
+        private void ExitApplication()
+        {
+            exitRequested = true;
+            Close();
+        }
+
+        private void StartBackgroundMonitors()
+        {
+            reconnectTimer = new System.Threading.Timer(
+                EnsureSerialConnectedInBackground, null, 0, 2000);
+            darkroomProbeTimer = new System.Threading.Timer(
+                ProbeDarkroomInBackground, null, 0, 1000);
+        }
+
+        private void StopBackgroundMonitors()
+        {
+            System.Threading.Timer reconnect = reconnectTimer;
+            reconnectTimer = null;
+            if (reconnect != null)
+                reconnect.Dispose();
+
+            System.Threading.Timer probe = darkroomProbeTimer;
+            darkroomProbeTimer = null;
+            if (probe != null)
+                probe.Dispose();
+        }
+
+        private void EnsureSerialConnectedInBackground(object state)
+        {
+            if (shuttingDown)
+                return;
+            if (Interlocked.Exchange(ref reconnectActive, 1) != 0)
+                return;
+            try
+            {
+                EnsureSerialConnected();
+            }
+            catch (Exception exception)
+            {
+                Log("Serial monitor failed: " + exception.Message);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref reconnectActive, 0);
+            }
+        }
+
+        private void ProbeDarkroomInBackground(object state)
+        {
+            if (shuttingDown)
+                return;
+            if (Interlocked.Exchange(ref darkroomProbeActive, 1) != 0)
+                return;
+            try
+            {
+                UpdateDarkroomState();
+            }
+            catch (Exception exception)
+            {
+                Log("Darkroom monitor failed: " + exception.Message);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref darkroomProbeActive, 0);
             }
         }
 
         protected override void WndProc(ref Message message)
         {
+            if (message.Msg == WmActivateExistingInstance)
+            {
+                ShowMainWindow();
+                message.Result = IntPtr.Zero;
+                return;
+            }
             if (message.Msg == WmHotkey)
             {
                 int id = message.WParam.ToInt32();
                 if (id == HotkeyTogglePause)
                     TogglePause();
                 else if (id == HotkeyEmergencyPause)
-                    SetPaused(true, "Emergency pause hotkey pressed.");
+                    SetPaused(true, "Emergency stop hotkey pressed.");
             }
             base.WndProc(ref message);
-        }
-
-        private void BeginOverlayDrag(
-            object sender, MouseEventArgs args)
-        {
-            if (args.Button != MouseButtons.Left)
-                return;
-            ReleaseCapture();
-            SendMessage(
-                Handle, 0x00A1, new IntPtr(2), IntPtr.Zero);
-            SaveOverlayPosition();
-        }
-
-        private void BeginOverlayResize(
-            object sender, MouseEventArgs args)
-        {
-            if (args.Button != MouseButtons.Left)
-                return;
-            ReleaseCapture();
-            SendMessage(
-                Handle, 0x00A1, new IntPtr(17), IntPtr.Zero);
         }
 
         private bool TryLoadOverlayPosition(out Point location)
@@ -652,8 +1363,8 @@ namespace Jvdp.LightDarkroomOverlay
                     !Int32.TryParse(parts[0], out width) ||
                     !Int32.TryParse(parts[1], out height))
                     return false;
-                width = Math.Max(450, Math.Min(1200, width));
-                height = Math.Max(530, Math.Min(1200, height));
+                width = Math.Max(1000, Math.Min(1800, width));
+                height = Math.Max(720, Math.Min(1100, height));
                 size = new Size(width, height);
                 return true;
             }
@@ -699,6 +1410,440 @@ namespace Jvdp.LightDarkroomOverlay
             catch { }
         }
 
+        private bool LoadAutomaticAdjustmentStopped()
+        {
+            try
+            {
+                return File.Exists(automaticStatePath) &&
+                    File.ReadAllText(automaticStatePath).Trim().Equals(
+                        "stopped", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void SaveAutomaticAdjustmentState()
+        {
+            try
+            {
+                File.WriteAllText(automaticStatePath,
+                    paused ? "stopped" : "started",
+                    new UTF8Encoding(false));
+            }
+            catch (Exception exception)
+            {
+                Log("Automatic adjustment state could not be saved: " +
+                    exception.Message);
+            }
+        }
+
+        private void LoadCoverTextSettings()
+        {
+            try
+            {
+                if (!File.Exists(coverTextPath))
+                    return;
+                foreach (string source in File.ReadAllLines(coverTextPath))
+                {
+                    string line = source.Trim();
+                    if (line.Equals("mode=custom",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        useCustomCoverText = true;
+                    }
+                    else if (line.StartsWith("title=",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        customCoverTitle = DecodeSettingText(
+                            line.Substring(6), DefaultCoverTitle);
+                    }
+                    else if (line.StartsWith("message=",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        customCoverMessage = DecodeSettingText(
+                            line.Substring(8), DefaultCoverMessage);
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                Log("Fullpage text settings could not be loaded: " +
+                    exception.Message);
+            }
+        }
+
+        private void SaveCoverTextSettings()
+        {
+            try
+            {
+                string title;
+                string message;
+                bool custom;
+                lock (coverTextSync)
+                {
+                    custom = useCustomCoverText;
+                    title = customCoverTitle;
+                    message = customCoverMessage;
+                }
+                File.WriteAllLines(coverTextPath, new[] {
+                    custom ? "mode=custom" : "mode=default",
+                    "title=" + EncodeSettingText(title),
+                    "message=" + EncodeSettingText(message)
+                }, new UTF8Encoding(false));
+            }
+            catch (Exception exception)
+            {
+                Log("Fullpage text settings could not be saved: " +
+                    exception.Message);
+            }
+        }
+
+        private static string EncodeSettingText(string value)
+        {
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? ""));
+        }
+
+        private static string DecodeSettingText(
+            string value, string fallback)
+        {
+            try
+            {
+                string decoded = Encoding.UTF8.GetString(
+                    Convert.FromBase64String(value));
+                return String.IsNullOrWhiteSpace(decoded) ? fallback : decoded;
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
+        private string GetActiveCoverTitle()
+        {
+            lock (coverTextSync)
+                return useCustomCoverText
+                    ? customCoverTitle
+                    : DefaultCoverTitle;
+        }
+
+        private string GetActiveCoverMessage()
+        {
+            lock (coverTextSync)
+                return useCustomCoverText
+                    ? customCoverMessage
+                    : DefaultCoverMessage;
+        }
+
+        private static List<IsoBand> CreateDefaultIsoBands()
+        {
+            return new List<IsoBand> {
+                new IsoBand(25, 3200),
+                new IsoBand(50, 1600),
+                new IsoBand(75, 800),
+                new IsoBand(100, 400)
+            };
+        }
+
+        private void LoadIsoMappingSettings()
+        {
+            try
+            {
+                if (!File.Exists(mappingPath))
+                    return;
+                string[] lines = File.ReadAllLines(mappingPath);
+                bool customMode = false;
+                List<IsoBand> loaded = new List<IsoBand>();
+                foreach (string source in lines)
+                {
+                    string line = source.Trim();
+                    if (line.Equals("mode=custom",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        customMode = true;
+                        continue;
+                    }
+                    if (!line.StartsWith("band=",
+                            StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    string[] parts = line.Substring(5).Split(',');
+                    int maximum;
+                    int iso;
+                    if (parts.Length == 2 &&
+                        Int32.TryParse(parts[0], out maximum) &&
+                        Int32.TryParse(parts[1], out iso))
+                        loaded.Add(new IsoBand(maximum, iso));
+                }
+                if (IsoBandsAreValid(loaded))
+                    customIsoBands = loaded;
+                useCustomMapping = customMode;
+            }
+            catch (Exception exception)
+            {
+                Log("ISO mapping settings could not be loaded: " +
+                    exception.Message);
+            }
+        }
+
+        private void SaveIsoMappingSettings()
+        {
+            try
+            {
+                List<string> lines = new List<string>();
+                lock (mappingSync)
+                {
+                    lines.Add(useCustomMapping
+                        ? "mode=custom"
+                        : "mode=default");
+                    foreach (IsoBand band in customIsoBands)
+                        lines.Add("band=" + band.MaximumLight + "," + band.Iso);
+                }
+                File.WriteAllLines(mappingPath, lines.ToArray(),
+                    new UTF8Encoding(false));
+            }
+            catch (Exception exception)
+            {
+                Log("ISO mapping settings could not be saved: " +
+                    exception.Message);
+            }
+        }
+
+        private static bool IsoBandsAreValid(List<IsoBand> bands)
+        {
+            if (bands == null || bands.Count < 1 || bands.Count > 8)
+                return false;
+            int previous = -1;
+            foreach (IsoBand band in bands)
+            {
+                if (band.MaximumLight <= previous ||
+                    band.MaximumLight > 100 ||
+                    Array.IndexOf(SupportedIsoValues, band.Iso) < 0)
+                    return false;
+                previous = band.MaximumLight;
+            }
+            return previous == 100;
+        }
+
+        private List<IsoBand> GetActiveIsoBands()
+        {
+            lock (mappingSync)
+            {
+                List<IsoBand> source = useCustomMapping
+                    ? customIsoBands
+                    : CreateDefaultIsoBands();
+                List<IsoBand> copy = new List<IsoBand>();
+                foreach (IsoBand band in source)
+                    copy.Add(band.Clone());
+                return copy;
+            }
+        }
+
+        private int MapLightToIso(int light)
+        {
+            List<IsoBand> bands = GetActiveIsoBands();
+            foreach (IsoBand band in bands)
+                if (light <= band.MaximumLight)
+                    return band.Iso;
+            return bands[bands.Count - 1].Iso;
+        }
+
+        private void RecalculateMappedIso()
+        {
+            int light;
+            lock (sensor.Sync)
+            {
+                light = sensor.Light;
+                if (light < 0)
+                {
+                    sensor.MappedIso = -1;
+                    sensor.CandidateSince = DateTime.MinValue;
+                    return;
+                }
+            }
+            int mappedIso = MapLightToIso(light);
+            lock (sensor.Sync)
+            {
+                if (sensor.Light != light)
+                    return;
+                if (sensor.MappedIso != mappedIso)
+                {
+                    sensor.MappedIso = mappedIso;
+                    sensor.CandidateSince = DateTime.Now;
+                    Log("PC mapping changed target ISO to " + mappedIso +
+                        " at light " + light + ".");
+                }
+            }
+        }
+
+        private string BuildMappingSummary()
+        {
+            List<IsoBand> bands = GetActiveIsoBands();
+            List<string> parts = new List<string>();
+            int lower = 0;
+            foreach (IsoBand band in bands)
+            {
+                parts.Add(lower + "–" + band.MaximumLight +
+                    " → ISO " + band.Iso);
+                lower = band.MaximumLight + 1;
+            }
+            return String.Join("   ·   ", parts.ToArray());
+        }
+
+        private void UpdateMappingControls()
+        {
+            if (mappingModeInput == null || mappingSummaryLabel == null)
+                return;
+            updatingMappingControls = true;
+            try
+            {
+                mappingModeInput.SelectedIndex = useCustomMapping ? 1 : 0;
+                mappingSummaryLabel.Text =
+                    (useCustomMapping
+                        ? "Eigen profiel voor " + Environment.MachineName
+                        : "Standaardprofiel voor alle booths") +
+                    Environment.NewLine + BuildMappingSummary();
+                if (profileNameLabel != null)
+                    profileNameLabel.Text = useCustomMapping
+                        ? "Eigen · " + Environment.MachineName
+                        : "Standaard · alle booths";
+                mappingSettingsButton.Text = useCustomMapping
+                    ? "Profiel wijzigen"
+                    : "Profiel bekijken";
+                if (rangeControl != null)
+                {
+                    int light;
+                    int iso;
+                    lock (sensor.Sync)
+                    {
+                        light = sensor.Light;
+                        iso = sensor.MappedIso;
+                    }
+                    rangeControl.UpdateData(GetActiveIsoBands(), light, iso);
+                }
+            }
+            finally
+            {
+                updatingMappingControls = false;
+            }
+        }
+
+        private void ShowIsoMappingSettings()
+        {
+            ShowMainWindow();
+            if (settingsPage != null && !settingsPage.IsDisposed)
+            {
+                settingsPage.BringToFront();
+                settingsPage.Focus();
+                return;
+            }
+
+            List<IsoBand> custom;
+            bool customMode;
+            lock (mappingSync)
+            {
+                customMode = useCustomMapping;
+                custom = new List<IsoBand>();
+                foreach (IsoBand band in customIsoBands)
+                    custom.Add(band.Clone());
+            }
+
+            IsoMappingForm page = new IsoMappingForm(
+                customMode, custom, CreateDefaultIsoBands(),
+                SupportedIsoValues, Environment.MachineName,
+                stabilitySeconds, useCustomCoverText,
+                customCoverTitle, customCoverMessage,
+                DefaultCoverTitle, DefaultCoverMessage);
+            settingsPage = page;
+            page.TopLevel = false;
+            page.FormBorderStyle = FormBorderStyle.None;
+            page.SetBounds(0, 64, ClientSize.Width,
+                Math.Max(1, ClientSize.Height - 92));
+            page.Anchor = AnchorStyles.Top | AnchorStyles.Bottom |
+                AnchorStyles.Left | AnchorStyles.Right;
+            page.FormClosed += delegate
+            {
+                if (page.DialogResult == DialogResult.OK)
+                {
+                    lock (mappingSync)
+                    {
+                        useCustomMapping = page.UseCustomMapping;
+                        customIsoBands = page.CustomBands;
+                    }
+                    stabilitySeconds = page.StabilitySeconds;
+                    lock (coverTextSync)
+                    {
+                        useCustomCoverText = page.UseCustomCoverText;
+                        customCoverTitle = page.CustomCoverTitle;
+                        customCoverMessage = page.CustomCoverMessage;
+                    }
+                    if (stabilitySecondsInput.Value != stabilitySeconds)
+                        stabilitySecondsInput.Value = stabilitySeconds;
+                    SaveStabilitySeconds();
+                    SaveIsoMappingSettings();
+                    SaveCoverTextSettings();
+                    RecalculateMappedIso();
+                    UpdateMappingControls();
+                    RefreshUi();
+                    Log("Settings saved; profile=" +
+                        (useCustomMapping ? "custom" : "default") +
+                        "; booth=" + Environment.MachineName +
+                        "; stability=" + stabilitySeconds + " seconds" +
+                        "; coverText=" +
+                        (useCustomCoverText ? "custom" : "default") + ".");
+                }
+                settingsPage = null;
+                dashboard.Visible = true;
+                settingsButton.Text = "Instellingen";
+                settingsButton.AccessibleName =
+                    "Profielinstellingen openen";
+            };
+            Controls.Add(page);
+            dashboard.Visible = false;
+            settingsButton.Text = "Terug naar dashboard";
+            settingsButton.AccessibleName = "Terug naar dashboard";
+            page.BringToFront();
+            page.Show();
+            page.Focus();
+        }
+
+        private static string BuildVersionFooterText(string localRoot)
+        {
+            DateTime installedAt = File.GetLastWriteTime(
+                Application.ExecutablePath);
+            string metadataPath = Path.Combine(localRoot, "installation.txt");
+            try
+            {
+                if (File.Exists(metadataPath))
+                {
+                    foreach (string line in File.ReadAllLines(metadataPath))
+                    {
+                        const string prefix = "Installed=";
+                        if (!line.StartsWith(prefix,
+                            StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        DateTime parsed;
+                        if (DateTime.TryParse(
+                            line.Substring(prefix.Length).Trim(),
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.AssumeLocal, out parsed))
+                            installedAt = parsed;
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                // The executable timestamp remains a safe fallback.
+            }
+
+            return "Laatst bijgewerkt: " +
+                installedAt.ToString("dd-MM-yyyy HH:mm",
+                    CultureInfo.InvariantCulture) +
+                "  ·  Versie " + BuildTag;
+        }
+
         private static Label MakeLabel(
             string text, float size, FontStyle style, Color color)
         {
@@ -712,9 +1857,42 @@ namespace Jvdp.LightDarkroomOverlay
             return label;
         }
 
-        private static Button MakeWindowButton(OverlayButtonIcon icon)
+        private static Panel MakeLightSurface(int width, int height)
         {
-            return new OverlayIconButton(icon);
+            Panel panel = new Panel();
+            panel.BackColor = Color.White;
+            panel.BorderStyle = BorderStyle.FixedSingle;
+            panel.SetBounds(0, 0, width, height);
+            return panel;
+        }
+
+        private static Button MakeLightButton(string text, bool primary)
+        {
+            Button button = new Button();
+            button.Text = text;
+            button.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = primary ? 0 : 1;
+            button.FlatAppearance.BorderColor = Color.FromArgb(31, 111, 235);
+            button.BackColor = primary
+                ? Color.FromArgb(31, 111, 235)
+                : Color.White;
+            button.ForeColor = primary
+                ? Color.White
+                : Color.FromArgb(20, 102, 196);
+            button.UseVisualStyleBackColor = false;
+            button.MinimumSize = new Size(44, 44);
+            button.AccessibleRole = AccessibleRole.PushButton;
+            return button;
+        }
+
+        private static void AddLightDetailCaption(
+            Panel panel, string text, int left, int top)
+        {
+            Label caption = MakeLabel(
+                text, 9, FontStyle.Regular, Color.FromArgb(99, 108, 118));
+            caption.SetBounds(left, top, 168, 28);
+            panel.Controls.Add(caption);
         }
 
         private void AddConnectionRow(
@@ -743,9 +1921,8 @@ namespace Jvdp.LightDarkroomOverlay
             Label right = MakeLabel(
                 "—", 10, FontStyle.Bold, Color.FromArgb(201, 209, 217));
             right.TextAlign = ContentAlignment.MiddleRight;
-            right.SetBounds(200, top, ClientSize.Width - 220, 28);
-            right.Anchor = AnchorStyles.Top | AnchorStyles.Left |
-                AnchorStyles.Right;
+            right.SetBounds(200, top, ClientSize.Width / 2 - 220, 28);
+            right.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             Controls.Add(right);
             return right;
         }
@@ -762,12 +1939,15 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void TogglePause()
         {
-            SetPaused(!paused, paused ? "Observer resumed." : "Observer paused.");
+            SetPaused(!paused, paused
+                ? "Automatisch aanpassen gestart."
+                : "Automatisch aanpassen gestopt.");
         }
 
         private void SetPaused(bool value, string message)
         {
             paused = value;
+            SaveAutomaticAdjustmentState();
             Log(message);
             RefreshUi();
         }
@@ -776,18 +1956,32 @@ namespace Jvdp.LightDarkroomOverlay
         {
             if (manualActionRunning)
                 return;
+            int requestedIso;
+            lock (sensor.Sync)
+                requestedIso = sensor.MappedIso;
+            if (!serialReady || requestedIso <= 0 || !darkroomRunning)
+            {
+                manualActionFailed = true;
+                manualActionStatus = !serialReady || requestedIso <= 0
+                    ? "Er is nog geen geldige lichtmeting."
+                    : "Darkroom is niet actief.";
+                manualActionStatusUntil = DateTime.Now.AddSeconds(6);
+                RefreshUi();
+                return;
+            }
             manualActionRunning = true;
             manualActionFailed = false;
             currentActionAutomatic = automatic;
             manualActionStatus = automatic
-                ? "Automatic action: preparing Darkroom..."
-                : "Manual action: preparing Darkroom...";
+                ? "Darkroom automatisch voorbereiden…"
+                : "Darkroom voorbereiden…";
             manualActionStatusUntil = DateTime.MaxValue;
             runActionButton.Enabled = false;
-            runActionButton.Text = "RUNNING...";
+            runActionButton.Text = "ISO toepassen…";
             coverToggleButton.Enabled = false;
+            pauseButton.Enabled = false;
             Log((automatic ? "Automatic" : "Manual") +
-                " ESP Target ISO action requested.");
+                " PC-mapped target ISO action requested.");
             Thread worker = new Thread(RunTargetIsoAction);
             worker.IsBackground = true;
             worker.SetApartmentState(ApartmentState.STA);
@@ -806,11 +2000,11 @@ namespace Jvdp.LightDarkroomOverlay
             {
                 int desiredIso;
                 lock (sensor.Sync)
-                    desiredIso = sensor.TargetIso;
+                    desiredIso = sensor.MappedIso;
                 if (desiredIso <= 0)
                     throw new InvalidOperationException(
-                        "No valid Target ISO has been received from the ESP.");
-                Log("Locked ESP Target ISO " + desiredIso +
+                        "No valid target ISO is available from the PC mapping.");
+                Log("Locked PC-mapped target ISO " + desiredIso +
                     " for this " + (automatic ? "automatic" : "manual") +
                     " action before Darkroom navigation.");
                 process = FindDarkroomProcess();
@@ -833,7 +2027,7 @@ namespace Jvdp.LightDarkroomOverlay
                     "coordinates or mouse input used.");
                 List<ComboItem> items = ReadComboItems(combo);
                 string observedIso = ReadComboSelection(combo);
-                Log("ISO state: ESP target=" + desiredIso +
+                Log("ISO state: PC target=" + desiredIso +
                     ", Darkroom current=" + observedIso +
                     ", available choices=" + items.Count + ".");
                 ComboItem target = FindClosestNumericIso(items, desiredIso);
@@ -843,7 +2037,7 @@ namespace Jvdp.LightDarkroomOverlay
                 if (!String.Equals(
                         target.Value, desiredIso.ToString(),
                         StringComparison.OrdinalIgnoreCase))
-                    Log("ESP Target ISO " + desiredIso +
+                    Log("PC target ISO " + desiredIso +
                         " is unavailable; using nearest Darkroom ISO " +
                         target.Value + ".");
 
@@ -853,14 +2047,14 @@ namespace Jvdp.LightDarkroomOverlay
                 {
                     currentDarkroomIso = target.Value;
                     currentIsoReadAt = DateTime.Now;
-                    finalStatus = "No change - Darkroom is already at ESP Target ISO " +
+                    finalStatus = "No change - Darkroom is already at target ISO " +
                                   target.Value + ".";
                     Log(finalStatus);
                 }
                 else
                 {
                     SetManualActionStatus(
-                        "Step 2/3 - selecting ESP Target ISO " +
+                        "Step 2/3 - selecting target ISO " +
                         target.Value + "...");
                     string selectionMethod = SelectIsoWithoutCoordinates(
                         window, ref combo, target);
@@ -879,11 +2073,11 @@ namespace Jvdp.LightDarkroomOverlay
                             confirmed, target.Value,
                             StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException(
-                            "Darkroom did not confirm ESP Target ISO " +
+                            "Darkroom did not confirm target ISO " +
                             target.Value + ".");
                     currentDarkroomIso = confirmed;
                     currentIsoReadAt = DateTime.Now;
-                    finalStatus = "Done - Darkroom ISO now matches ESP Target ISO " +
+                    finalStatus = "Done - Darkroom ISO now matches target ISO " +
                                   confirmed + ".";
                     Log(finalStatus);
                 }
@@ -949,8 +2143,9 @@ namespace Jvdp.LightDarkroomOverlay
                 BeginInvoke((MethodInvoker)delegate
                 {
                     runActionButton.Enabled = true;
-                    runActionButton.Text = "RUN NOW (MANUAL)";
+                    runActionButton.Text = "Doel-ISO nu toepassen";
                     coverToggleButton.Enabled = true;
+                    pauseButton.Enabled = true;
                     UpdateCoverToggleButton();
                     RefreshUi();
                 });
@@ -980,11 +2175,14 @@ namespace Jvdp.LightDarkroomOverlay
         private void UpdateCoverToggleButton()
         {
             coverToggleButton.Text = manualCoverVisible
-                ? "HIDE FULLSCREEN COVER"
-                : "SHOW FULLSCREEN COVER";
+                ? "AFDEKKING STOPPEN"
+                : "VOLLEDIG SCHERM AFDEKKEN";
             coverToggleButton.BackColor = manualCoverVisible
                 ? Color.FromArgb(187, 45, 59)
-                : Color.FromArgb(35, 134, 54);
+                : Color.FromArgb(33, 38, 45);
+            coverToggleButton.ForeColor = manualCoverVisible
+                ? Color.White
+                : Color.FromArgb(121, 192, 255);
         }
 
         private bool ShowFullscreenCovers(bool keepControlsVisible)
@@ -1001,7 +2199,9 @@ namespace Jvdp.LightDarkroomOverlay
                 foreach (Screen screen in Screen.AllScreens)
                 {
                     ActionCoverForm cover =
-                        new ActionCoverForm(screen.Bounds);
+                        new ActionCoverForm(screen.Bounds,
+                            GetActiveCoverTitle(),
+                            GetActiveCoverMessage());
                     actionCovers.Add(cover);
                     cover.Show();
                     cover.BringToFront();
@@ -1898,19 +3098,31 @@ namespace Jvdp.LightDarkroomOverlay
         }
         private void EnsureSerialConnected()
         {
+            if (shuttingDown)
+                return;
+            if (Interlocked.Exchange(ref serialFaulted, 0) != 0)
+                CloseSerial();
+
             if (serial != null && serial.IsOpen)
             {
-                if (lastJvdpLineAt < serialOpenedAt &&
-                    DateTime.Now - serialOpenedAt > TimeSpan.FromSeconds(5))
+                bool neverValidated = lastJvdpLineAt < serialOpenedAt &&
+                    DateTime.Now - serialOpenedAt > TimeSpan.FromSeconds(5);
+                bool becameSilent = lastJvdpLineAt >= serialOpenedAt &&
+                    DateTime.Now - lastJvdpLineAt > TimeSpan.FromSeconds(5);
+                if (neverValidated || becameSilent)
                 {
                     string rejectedPort = activeSerialPort;
                     lock (serialRetryAfter)
                         serialRetryAfter[rejectedPort] =
                             DateTime.Now.AddSeconds(20);
-                    Log("Rejected " + rejectedPort +
-                        ": no JVDP sensor data received within 5 seconds.");
+                    Log((neverValidated ? "Rejected " : "Disconnected ") +
+                        rejectedPort +
+                        ": no JVDP light data received within 5 seconds.");
                     lock (sensor.Sync)
-                        sensor.SerialStatus = rejectedPort + " is not the ESP";
+                        sensor.SerialStatus = neverValidated
+                            ? rejectedPort + " is not the ESP"
+                            : rejectedPort + " stopped sending light data";
+                    serialReady = false;
                     CloseSerial();
                 }
                 else
@@ -1939,10 +3151,17 @@ namespace Jvdp.LightDarkroomOverlay
                     candidate.ReadTimeout = 1000;
                     candidate.DataReceived += SerialDataReceived;
                     candidate.Open();
+                    if (shuttingDown)
+                    {
+                        candidate.DataReceived -= SerialDataReceived;
+                        candidate.Dispose();
+                        return;
+                    }
                     serial = candidate;
                     activeSerialPort = portName;
                     serialOpenedAt = DateTime.Now;
                     lastJvdpLineAt = DateTime.MinValue;
+                    serialReady = false;
                     lock (sensor.Sync)
                     {
                         sensor.SerialStatus = portName + " opened; checking ESP";
@@ -1974,6 +3193,7 @@ namespace Jvdp.LightDarkroomOverlay
                 sensor.SerialStatus = candidates.Count == 0
                     ? "No serial ports found"
                     : "ESP serial port unavailable";
+            serialReady = false;
         }
 
         private static List<string> FindCandidateSerialPorts()
@@ -2084,11 +3304,16 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void CloseSerial()
         {
-            SerialPort old = serial;
-            serial = null;
-            activeSerialPort = "";
-            serialOpenedAt = DateTime.MinValue;
-            lastJvdpLineAt = DateTime.MinValue;
+            SerialPort old;
+            lock (serialSync)
+            {
+                old = serial;
+                serial = null;
+                activeSerialPort = "";
+                serialOpenedAt = DateTime.MinValue;
+                lastJvdpLineAt = DateTime.MinValue;
+                serialReady = false;
+            }
             if (old == null)
                 return;
             try
@@ -2105,41 +3330,38 @@ namespace Jvdp.LightDarkroomOverlay
         {
             try
             {
-                SerialPort active = serial;
-                if (active == null || !active.IsOpen)
+                SerialPort active = sender as SerialPort;
+                if (active == null || !ReferenceEquals(active, serial) ||
+                    !active.IsOpen)
                     return;
 
                 while (active.BytesToRead > 0)
                 {
                     string line = active.ReadLine().Trim();
-                    Match rawMatch = Regex.Match(
-                        line, @"^Raw:\s*(\d+)\s*\|\s*Light:");
-                    if (rawMatch.Success)
-                    {
-                        lock (sensor.Sync)
-                            sensor.Raw = Int32.Parse(rawMatch.Groups[1].Value);
-                    }
-
                     Match machineMatch = Regex.Match(
-                        line, @"^JVDP\|light=(\d{1,3})\|iso=(\d+)$");
+                        line, @"^JVDP\|light=(\d{1,3})(?:\|iso=\d+)?$");
                     if (!machineMatch.Success)
                         continue;
 
                     int light = Int32.Parse(machineMatch.Groups[1].Value);
-                    int iso = Int32.Parse(machineMatch.Groups[2].Value);
+                    if (light < 0 || light > 100)
+                        continue;
+                    int mappedIso = MapLightToIso(light);
                     lock (sensor.Sync)
                     {
                         lastJvdpLineAt = DateTime.Now;
-                        if (sensor.TargetIso != iso)
+                        if (sensor.MappedIso != mappedIso)
                         {
-                            sensor.TargetIso = iso;
+                            sensor.MappedIso = mappedIso;
                             sensor.CandidateSince = DateTime.Now;
                             Log(string.Format(
-                                "New target ISO {0} at light {1}.", iso, light));
+                                "PC mapped light {1} to target ISO {0}.",
+                                mappedIso, light));
                         }
                         sensor.Light = light;
                         sensor.SerialStatus = active.PortName + " connected";
                     }
+                    serialReady = true;
                 }
             }
             catch (TimeoutException) { }
@@ -2158,50 +3380,79 @@ namespace Jvdp.LightDarkroomOverlay
                         : failedPort + " disconnected";
                     sensor.LastSerialError = exception.Message;
                 }
-                CloseSerial();
+                serialReady = false;
+                Interlocked.Exchange(ref serialFaulted, 1);
             }
         }
 
         private void RefreshUi()
         {
-            UpdateDarkroomState();
-
             int light;
-            int raw;
             int targetIso;
             DateTime candidateSince;
             string serialStatus;
+            DateTime lastMeasurement;
             lock (sensor.Sync)
             {
                 light = sensor.Light;
-                raw = sensor.Raw;
-                targetIso = sensor.TargetIso;
+                targetIso = sensor.MappedIso;
                 candidateSince = sensor.CandidateSince;
                 serialStatus = sensor.SerialStatus;
+                lastMeasurement = lastJvdpLineAt;
             }
 
             lightLabel.Text = light >= 0 ? light.ToString() : "—";
-            rawLabel.Text = raw >= 0 ? "Raw: " + raw : "Raw: —";
             targetIsoLabel.Text = targetIso > 0 ? targetIso.ToString() : "—";
+            activeRangeLabel.Text = GetActiveRangeText(light);
+            rangeControl.UpdateData(GetActiveIsoBands(), light, targetIso);
+            if (lastMeasurement == DateTime.MinValue)
+            {
+                lastMeasuredLabel.Text = "Wachten op eerste meting";
+            }
+            else
+            {
+                double age = Math.Max(0,
+                    (DateTime.Now - lastMeasurement).TotalSeconds);
+                lastMeasuredLabel.Text = "Laatste meting: " +
+                    lastMeasurement.ToString("HH:mm:ss") + " · " +
+                    (age < 1 ? "zojuist" : String.Format("{0:0} sec geleden", age));
+            }
+            trayIcon.Text = light >= 0 && targetIso > 0
+                ? "JvdP Lichtsensor - licht " + light + " naar ISO " + targetIso
+                : "JvdP Lichtsensor - wachten op lichtdata";
 
-            bool serialReady = serial != null && serial.IsOpen;
-            SetStatusLabel(serialLabel, serialStatus, serialReady);
+            bool sensorConnected = serialReady;
+            SetStatusLabel(serialLabel,
+                sensorConnected ? "Verbonden" : "Sensor zoeken",
+                sensorConnected);
             SetStatusLabel(
                 darkroomLabel,
-                darkroomRunning ? "Running" : "Not running",
+                darkroomRunning ? "Verbonden" : "Niet actief",
                 darkroomRunning);
             SetStatusLabel(
                 boothLabel,
-                boothMode ? "Active" : "Inactive",
+                boothMode ? "Actief" : "Niet actief",
                 boothMode);
 
             string isoText = currentDarkroomIso;
+            if (isoText == "Unknown")
+                isoText = "Onbekend";
             if (currentIsoReadAt != DateTime.MinValue)
-                isoText += "  ·  verified";
+                isoText += " · gecontroleerd";
             SetStatusLabel(
                 currentIsoLabel,
                 isoText,
                 currentDarkroomIso != "Unknown");
+
+            detailsSummaryLabel.Text =
+                (sensorConnected ? "Sensor verbonden" : "Sensor zoeken") +
+                " · " +
+                (darkroomRunning ? "Darkroom verbonden" : "Darkroom niet actief");
+            detailsSummaryLabel.ForeColor = sensorConnected && darkroomRunning
+                ? Color.FromArgb(34, 132, 67)
+                : !darkroomRunning
+                    ? Color.FromArgb(186, 36, 36)
+                    : Color.FromArgb(137, 87, 0);
 
             double stableSeconds = 0.0;
             if (candidateSince != DateTime.MinValue)
@@ -2211,35 +3462,157 @@ namespace Jvdp.LightDarkroomOverlay
                     (DateTime.Now - candidateSince).TotalSeconds);
             }
             countdownLabel.Text = string.Format(
-                "{0:0.0} / {1:0.0} s", stableSeconds, stabilitySeconds);
+                "{0:0.0} / {1:0.0} sec", stableSeconds, stabilitySeconds);
             progressFill.Width = (int)Math.Round(
                 progressFill.Parent.ClientSize.Width *
                 stableSeconds / stabilitySeconds);
             progressFill.BackColor = stableSeconds >= stabilitySeconds
-                ? Color.FromArgb(81, 216, 138)
-                : Color.FromArgb(247, 201, 72);
+                ? Color.FromArgb(34, 132, 67)
+                : Color.FromArgb(31, 111, 235);
 
-            TryStartAutomaticAction(targetIso, stableSeconds, serialReady);
+            TryStartAutomaticAction(targetIso, stableSeconds, sensorConnected);
 
-            modeLabel.Text = manualActionRunning
-                ? "RUNNING"
-                : (paused ? "PAUSED" : "AUTO");
-            modeLabel.BackColor = manualActionRunning
-                ? Color.FromArgb(247, 201, 72)
-                : (paused
-                    ? Color.FromArgb(248, 81, 73)
-                    : Color.FromArgb(81, 216, 138));
+            bool ready = sensorConnected && targetIso > 0 &&
+                darkroomRunning && boothMode && !paused;
+            if (manualActionRunning)
+            {
+                overallStatusLabel.Text = "ISO toepassen…";
+                overallStatusLabel.ForeColor = Color.FromArgb(137, 87, 0);
+                modeLabel.Text = "Automatisch actief";
+            }
+            else if (paused)
+            {
+                overallStatusLabel.Text = "Automatisch gestopt";
+                overallStatusLabel.ForeColor = Color.FromArgb(99, 108, 118);
+                modeLabel.Text = "Automatisch gestopt";
+            }
+            else if (!sensorConnected || targetIso <= 0)
+            {
+                overallStatusLabel.Text = "Sensor zoeken";
+                overallStatusLabel.ForeColor = Color.FromArgb(137, 87, 0);
+                modeLabel.Text = "Automatisch actief";
+            }
+            else if (!darkroomRunning || !boothMode)
+            {
+                overallStatusLabel.Text = "Actie nodig";
+                overallStatusLabel.ForeColor = Color.FromArgb(186, 36, 36);
+                modeLabel.Text = "Automatisch actief";
+            }
+            else
+            {
+                overallStatusLabel.Text = "Klaar";
+                overallStatusLabel.ForeColor = Color.FromArgb(34, 132, 67);
+                modeLabel.Text = "Automatisch actief";
+            }
+            modeLabel.ForeColor = paused
+                ? Color.FromArgb(137, 87, 0)
+                : Color.FromArgb(20, 102, 196);
+            UpdateHeaderStatus(sensorConnected, targetIso, ready);
+
+            bool canApply = !manualActionRunning && sensorConnected &&
+                targetIso > 0 && darkroomRunning;
+            runActionButton.Enabled = canApply;
+            runActionButton.BackColor = canApply
+                ? Color.FromArgb(31, 111, 235)
+                : Color.FromArgb(225, 228, 233);
+            runActionButton.ForeColor = canApply
+                ? Color.White
+                : Color.FromArgb(112, 119, 128);
+            runActionButton.Text = targetIso > 0
+                ? "ISO " + targetIso + " nu toepassen"
+                : "Doel-ISO nu toepassen";
+            pauseButton.Enabled = !manualActionRunning;
+            pauseButton.Text = paused
+                ? "Automatisch aanpassen starten"
+                : "Automatisch aanpassen stoppen";
+            statusPanelToggleButton.Enabled = !manualActionRunning;
+            statusPanelToggleButton.Text = pauseButton.Text;
+            trayStatusMenuItem.Text = overallStatusLabel.Text + " — " +
+                detailsSummaryLabel.Text;
+            trayPauseMenuItem.Text = pauseButton.Text;
+            trayApplyMenuItem.Text = targetIso > 0
+                ? "ISO " + targetIso + " toepassen"
+                : "Doel-ISO toepassen";
+            trayApplyMenuItem.Enabled = canApply;
 
             bool showActionStatus =
                 manualActionRunning || DateTime.Now < manualActionStatusUntil;
             actionLabel.Text = showActionStatus
                 ? manualActionStatus
-                : BuildActionText(targetIso, stableSeconds, serialReady);
+                : BuildActionText(targetIso, stableSeconds, sensorConnected);
             actionLabel.ForeColor = showActionStatus && manualActionFailed
-                ? Color.FromArgb(248, 81, 73)
+                ? Color.FromArgb(186, 36, 36)
                 : (manualActionRunning
-                    ? Color.FromArgb(247, 201, 72)
-                    : Color.FromArgb(201, 209, 217));
+                    ? Color.FromArgb(137, 87, 0)
+                    : Color.FromArgb(71, 78, 88));
+        }
+
+        private void UpdateHeaderStatus(
+            bool sensorConnected, int targetIso, bool ready)
+        {
+            Color color = overallStatusLabel.ForeColor;
+            statusButton.Text = overallStatusLabel.Text + "  ›";
+            statusButton.ForeColor = color;
+            statusButton.FlatAppearance.BorderColor = color;
+            statusButton.BackColor = paused
+                ? Color.FromArgb(247, 248, 250)
+                : ready
+                    ? Color.FromArgb(240, 249, 243)
+                    : Color.FromArgb(255, 247, 235);
+            statusPanelTitle.Text = overallStatusLabel.Text;
+            statusPanelTitle.ForeColor = color;
+
+            if (manualActionRunning)
+            {
+                statusPanelMessage.Text =
+                    "De ISO-instelling wordt nu in Darkroom aangepast. " +
+                    "Wacht tot deze bewerking klaar is.";
+            }
+            else if (paused)
+            {
+                statusPanelMessage.Text =
+                    "Automatisch aanpassen staat uit en blijft ook na een " +
+                    "herstart uit. Klik op Starten om het later weer aan " +
+                    "te zetten.";
+            }
+            else if (!sensorConnected || targetIso <= 0)
+            {
+                statusPanelMessage.Text =
+                    "Er komt nog geen geldige lichtmeting binnen. Controleer " +
+                    "of de JvdP-lichtsensor is aangesloten en actief is.";
+            }
+            else if (!darkroomRunning)
+            {
+                statusPanelMessage.Text =
+                    "Darkroom Booth is niet actief. Start Darkroom Booth; " +
+                    "daarna kan de software de doel-ISO automatisch toepassen.";
+            }
+            else if (!boothMode)
+            {
+                statusPanelMessage.Text =
+                    "Darkroom is geopend, maar Booth Mode is niet actief. " +
+                    "Start Booth Mode om automatisch aanpassen te gebruiken.";
+            }
+            else
+            {
+                statusPanelMessage.Text =
+                    "De lichtsensor en Darkroom zijn verbonden. Automatisch " +
+                    "aanpassen staat aan en gebruikt de ingestelde wachttijd.";
+            }
+        }
+
+        private string GetActiveRangeText(int light)
+        {
+            if (light < 0)
+                return "—";
+            int lower = 0;
+            foreach (IsoBand band in GetActiveIsoBands())
+            {
+                if (light <= band.MaximumLight)
+                    return lower + "–" + band.MaximumLight;
+                lower = band.MaximumLight + 1;
+            }
+            return "—";
         }
 
         private void TryStartAutomaticAction(
@@ -2275,35 +3648,35 @@ namespace Jvdp.LightDarkroomOverlay
             int targetIso, double stableSeconds, bool serialReady)
         {
             if (paused)
-                return "Paused — automatic Darkroom actions are disabled.";
+                return "Automatisch aanpassen is gestopt.";
             if (!serialReady || targetIso <= 0)
-                return "Auto waiting for ESP sensor data…";
+                return "Wachten op een lichtmeting van de sensor.";
             if (!darkroomRunning)
-                return "Auto waiting: Darkroom Booth is not running.";
+                return "Darkroom is niet actief. ISO toepassen is uitgeschakeld.";
             if (DateTime.Now < nextAutomaticAttemptAt)
                 return string.Format(
-                    "Automatic retry in {0:0}s.",
+                    "Nieuwe automatische poging over {0:0} seconden.",
                     (nextAutomaticAttemptAt - DateTime.Now).TotalSeconds);
             if (stableSeconds < stabilitySeconds)
                 return string.Format(
-                    "Auto waiting {0:0.0}s for a stable target.",
+                    "Doel-ISO wordt nog {0:0.0} seconden gecontroleerd.",
                     stabilitySeconds - stableSeconds);
             if (lastAppliedTargetIso == targetIso &&
                 lastAppliedDarkroomProcessId == darkroomProcessId)
                 return string.Format(
-                    "Auto active — sensor target ISO {0} has been handled.",
+                    "ISO {0} is automatisch toegepast.",
                     targetIso);
             if (currentDarkroomIso == "Unknown")
                 return string.Format(
-                    "Auto ready — verifying current Darkroom ISO, target {0}.",
+                    "Huidige Darkroom-ISO controleren; doel is ISO {0}.",
                     targetIso);
             if (String.Equals(
                     currentDarkroomIso, targetIso.ToString(),
                     StringComparison.OrdinalIgnoreCase))
                 return string.Format(
-                    "Auto active — Darkroom is already ISO {0}.", targetIso);
+                    "Darkroom staat al op ISO {0}.", targetIso);
             return string.Format(
-                "Auto ready — changing Darkroom ISO {0} → {1}.",
+                "Darkroom wordt automatisch aangepast van ISO {0} naar {1}.",
                 currentDarkroomIso, targetIso);
         }
 
@@ -2505,11 +3878,14 @@ namespace Jvdp.LightDarkroomOverlay
         {
             try
             {
-                File.AppendAllText(
-                    logPath,
-                    string.Format(
-                        "{0:yyyy-MM-dd HH:mm:ss.fff}  {1}{2}",
-                        DateTime.Now, message, Environment.NewLine));
+                lock (logSync)
+                {
+                    File.AppendAllText(
+                        logPath,
+                        string.Format(
+                            "{0:yyyy-MM-dd HH:mm:ss.fff}  {1}{2}",
+                            DateTime.Now, message, Environment.NewLine));
+                }
             }
             catch { }
         }
@@ -2657,6 +4033,991 @@ namespace Jvdp.LightDarkroomOverlay
     }
 
 
+    internal sealed class IsoMappingForm : Form
+    {
+        private static readonly Color Background = Color.FromArgb(247, 248, 250);
+        private static readonly Color Card = Color.White;
+        private static readonly Color Border = Color.FromArgb(218, 222, 229);
+        private static readonly Color TextPrimary = Color.FromArgb(31, 35, 40);
+        private static readonly Color TextMuted = Color.FromArgb(99, 108, 118);
+        private static readonly Color Accent = Color.FromArgb(31, 111, 235);
+
+        private readonly RadioButton defaultProfile;
+        private readonly RadioButton customProfile;
+        private readonly DataGridView grid;
+        private readonly Button addButton;
+        private readonly Button removeButton;
+        private readonly Button saveButton;
+        private readonly Label explanation;
+        private readonly Panel profileCard;
+        private readonly Panel previewCard;
+        private readonly LightRangeControl previewRange;
+        private readonly NumericUpDown previewLightInput;
+        private readonly NumericUpDown stabilitySecondsInput;
+        private readonly Label previewText;
+        private readonly List<IsoBand> defaultBands;
+        private readonly int[] supportedIsos;
+        private readonly Button isoSettingsTab;
+        private readonly Button coverSettingsTab;
+        private readonly Button updateButton;
+        private readonly Label boothAndVersionLabel;
+        private readonly System.Windows.Forms.Timer updateStatusTimer;
+        private readonly Panel coverSettingsPanel;
+        private readonly RadioButton defaultCoverText;
+        private readonly RadioButton customCoverText;
+        private readonly TextBox coverTitleInput;
+        private readonly TextBox coverMessageInput;
+        private readonly Label coverPreviewTitle;
+        private readonly Label coverPreviewMessage;
+        private readonly string defaultCoverTitle;
+        private readonly string defaultCoverMessage;
+        private readonly string boothName;
+        private string draftCustomCoverTitle;
+        private string draftCustomCoverMessage;
+        private bool renderingCoverText;
+        private bool showingCoverSettings;
+        private bool rendering;
+        private bool renderedCustom;
+        private bool initialized;
+        private bool dirty;
+        private readonly string updaterExecutablePath;
+        private readonly string updaterStatusPath;
+        private DateTime updateCheckStartedAtUtc = DateTime.MinValue;
+
+        public bool UseCustomMapping { get; private set; }
+        public List<IsoBand> CustomBands { get; private set; }
+        public int StabilitySeconds
+        {
+            get { return (int)stabilitySecondsInput.Value; }
+        }
+        public bool UseCustomCoverText { get; private set; }
+        public string CustomCoverTitle
+        {
+            get { return draftCustomCoverTitle; }
+        }
+        public string CustomCoverMessage
+        {
+            get { return draftCustomCoverMessage; }
+        }
+
+        public IsoMappingForm(
+            bool useCustomMapping,
+            List<IsoBand> customBands,
+            List<IsoBand> defaults,
+            int[] isoValues,
+            string boothName,
+            int stabilitySeconds,
+            bool useCustomCoverText,
+            string customCoverTitle,
+            string customCoverMessage,
+            string defaultCoverTitleValue,
+            string defaultCoverMessageValue)
+        {
+            Text = "Instellingen";
+            ClientSize = new Size(1000, 720);
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            BackColor = Background;
+            ForeColor = TextPrimary;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Font = new Font("Segoe UI", 10, FontStyle.Regular);
+
+            defaultBands = CloneBands(defaults);
+            CustomBands = CloneBands(customBands);
+            supportedIsos = (int[])isoValues.Clone();
+            this.boothName = boothName;
+            UseCustomCoverText = useCustomCoverText;
+            defaultCoverTitle = defaultCoverTitleValue;
+            defaultCoverMessage = defaultCoverMessageValue;
+            draftCustomCoverTitle = String.IsNullOrWhiteSpace(customCoverTitle)
+                ? defaultCoverTitle : customCoverTitle;
+            draftCustomCoverMessage = String.IsNullOrWhiteSpace(customCoverMessage)
+                ? defaultCoverMessage : customCoverMessage;
+            string localRoot = Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData),
+                "JvdP", "LightDarkroomOverlay");
+            updaterExecutablePath = Path.Combine(
+                localRoot, "JvdpAutoUpdater.exe");
+            updaterStatusPath = Path.Combine(
+                localRoot, "updater-status.txt");
+
+            Label title = MakeDialogLabel(
+                "Instellingen", 18, FontStyle.Bold, TextPrimary);
+            title.SetBounds(24, 18, 196, 38);
+            Controls.Add(title);
+
+            isoSettingsTab = MakeDialogButton("Licht && ISO", true);
+            isoSettingsTab.SetBounds(210, 14, 118, 40);
+            isoSettingsTab.Click += delegate { ShowSettingsSection(false); };
+            Controls.Add(isoSettingsTab);
+
+            coverSettingsTab = MakeDialogButton("Overlay settings", false);
+            coverSettingsTab.SetBounds(336, 14, 156, 40);
+            coverSettingsTab.Click += delegate { ShowSettingsSection(true); };
+            Controls.Add(coverSettingsTab);
+
+            boothAndVersionLabel = MakeDialogLabel(
+                "Booth: " + boothName + "  ·  Versie " +
+                BuildInfo.Version, 9, FontStyle.Regular, TextMuted);
+            boothAndVersionLabel.TextAlign = ContentAlignment.MiddleRight;
+            boothAndVersionLabel.SetBounds(
+                ClientSize.Width - 520, 48, 280, 18);
+            boothAndVersionLabel.Anchor = AnchorStyles.Top |
+                AnchorStyles.Right;
+            Controls.Add(boothAndVersionLabel);
+
+            updateButton = MakeDialogButton(
+                "Updates controleren", false);
+            updateButton.SetBounds(
+                ClientSize.Width - 224, 14, 200, 40);
+            updateButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            updateButton.AccessibleName =
+                "Nu controleren op software-updates";
+            updateButton.Click += delegate { StartUpdateCheck(); };
+            Controls.Add(updateButton);
+
+            updateStatusTimer = new System.Windows.Forms.Timer();
+            updateStatusTimer.Interval = 500;
+            updateStatusTimer.Tick += delegate { RefreshUpdateStatus(); };
+
+            profileCard = new Panel();
+            profileCard.BackColor = Card;
+            profileCard.BorderStyle = BorderStyle.FixedSingle;
+            profileCard.SetBounds(24, 68, ClientSize.Width - 48, 100);
+            profileCard.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            Controls.Add(profileCard);
+
+            defaultProfile = new RadioButton();
+            defaultProfile.Text = "Standaardprofiel · alle booths";
+            defaultProfile.ForeColor = TextPrimary;
+            defaultProfile.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            defaultProfile.SetBounds(16, 12, 290, 28);
+            defaultProfile.AccessibleName = "Gebruik standaardprofiel voor alle booths";
+            profileCard.Controls.Add(defaultProfile);
+
+            customProfile = new RadioButton();
+            customProfile.Text = "Eigen profiel · deze booth";
+            customProfile.ForeColor = TextPrimary;
+            customProfile.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            customProfile.SetBounds(350, 12, 300, 28);
+            customProfile.AccessibleName = "Gebruik eigen profiel voor deze booth";
+            profileCard.Controls.Add(customProfile);
+
+            explanation = MakeDialogLabel(
+                "", 9, FontStyle.Regular, TextMuted);
+            explanation.SetBounds(18, 46, profileCard.Width - 318, 44);
+            explanation.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            profileCard.Controls.Add(explanation);
+
+            Label stabilityCaption = MakeDialogLabel(
+                "Licht stabiel (seconden)", 9, FontStyle.Regular,
+                TextMuted);
+            stabilityCaption.TextAlign = ContentAlignment.MiddleRight;
+            stabilityCaption.SetBounds(profileCard.Width - 286, 50, 190, 32);
+            stabilityCaption.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            profileCard.Controls.Add(stabilityCaption);
+
+            stabilitySecondsInput = new NumericUpDown();
+            stabilitySecondsInput.Minimum = 5;
+            stabilitySecondsInput.Maximum = 300;
+            stabilitySecondsInput.Increment = 5;
+            stabilitySecondsInput.Value = Math.Max(5,
+                Math.Min(300, stabilitySeconds));
+            stabilitySecondsInput.Font = new Font(
+                "Segoe UI", 10, FontStyle.Regular);
+            stabilitySecondsInput.TextAlign = HorizontalAlignment.Center;
+            stabilitySecondsInput.SetBounds(
+                profileCard.Width - 86, 52, 68, 28);
+            stabilitySecondsInput.Anchor = AnchorStyles.Top |
+                AnchorStyles.Right;
+            stabilitySecondsInput.AccessibleName =
+                "Aantal seconden dat de lichtwaarde stabiel moet zijn";
+            profileCard.Controls.Add(stabilitySecondsInput);
+
+            previewCard = new Panel();
+            previewCard.BackColor = Card;
+            previewCard.BorderStyle = BorderStyle.FixedSingle;
+            previewCard.SetBounds(24, 182, ClientSize.Width - 48, 150);
+            previewCard.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            Controls.Add(previewCard);
+
+            Label previewCaption = MakeDialogLabel(
+                "Grafische preview", 10, FontStyle.Bold, TextPrimary);
+            previewCaption.SetBounds(14, 7, 150, 28);
+            previewCard.Controls.Add(previewCaption);
+
+            Label previewLightCaption = MakeDialogLabel(
+                "Voorbeeldlichtwaarde", 9, FontStyle.Regular, TextMuted);
+            previewLightCaption.SetBounds(180, 7, 155, 28);
+            previewCard.Controls.Add(previewLightCaption);
+
+            previewLightInput = new NumericUpDown();
+            previewLightInput.Minimum = 0;
+            previewLightInput.Maximum = 100;
+            previewLightInput.Value = 63;
+            previewLightInput.Font = new Font("Segoe UI", 10, FontStyle.Regular);
+            previewLightInput.SetBounds(338, 7, 70, 28);
+            previewLightInput.AccessibleName = "Voorbeeldlichtwaarde";
+            previewCard.Controls.Add(previewLightInput);
+
+            previewText = MakeDialogLabel(
+                "", 9, FontStyle.Bold, Color.FromArgb(20, 102, 196));
+            previewText.TextAlign = ContentAlignment.MiddleRight;
+            previewText.SetBounds(420, 7, previewCard.Width - 434, 28);
+            previewText.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            previewCard.Controls.Add(previewText);
+
+            previewRange = new LightRangeControl();
+            previewRange.Interactive = true;
+            previewRange.Cursor = Cursors.Hand;
+            previewRange.AccessibleName =
+                "Versleepbare voorbeeldlichtwaarde";
+            previewRange.SetBounds(14, 43, previewCard.Width - 28, 92);
+            previewRange.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                AnchorStyles.Right;
+            previewCard.Controls.Add(previewRange);
+
+            grid = new DataGridView();
+            grid.SetBounds(24, 346, ClientSize.Width - 48,
+                ClientSize.Height - 346 - 92);
+            grid.Anchor = AnchorStyles.Top | AnchorStyles.Bottom |
+                AnchorStyles.Left | AnchorStyles.Right;
+            grid.BackgroundColor = Card;
+            grid.BorderStyle = BorderStyle.FixedSingle;
+            grid.GridColor = Border;
+            grid.RowHeadersVisible = false;
+            grid.AllowUserToAddRows = false;
+            grid.AllowUserToDeleteRows = false;
+            grid.AllowUserToResizeRows = false;
+            grid.MultiSelect = false;
+            grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            grid.ColumnHeadersHeight = 36;
+            grid.RowTemplate.Height = 36;
+            grid.EnableHeadersVisualStyles = false;
+            grid.ColumnHeadersDefaultCellStyle.BackColor = Border;
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = TextPrimary;
+            grid.ColumnHeadersDefaultCellStyle.Font =
+                new Font("Segoe UI", 9, FontStyle.Bold);
+            grid.DefaultCellStyle.BackColor = Card;
+            grid.DefaultCellStyle.ForeColor = TextPrimary;
+            grid.DefaultCellStyle.SelectionBackColor =
+                Color.FromArgb(32, 77, 126);
+            grid.DefaultCellStyle.SelectionForeColor = Color.White;
+            grid.DefaultCellStyle.Font = new Font("Segoe UI", 10);
+            grid.AccessibleName = "Licht naar ISO-bereiken";
+
+            DataGridViewTextBoxColumn fromColumn =
+                new DataGridViewTextBoxColumn();
+            fromColumn.HeaderText = "Licht vanaf";
+            fromColumn.ReadOnly = true;
+            grid.Columns.Add(fromColumn);
+
+            DataGridViewTextBoxColumn throughColumn =
+                new DataGridViewTextBoxColumn();
+            throughColumn.HeaderText = "Tot en met";
+            grid.Columns.Add(throughColumn);
+
+            DataGridViewComboBoxColumn isoColumn =
+                new DataGridViewComboBoxColumn();
+            isoColumn.HeaderText = "Darkroom ISO";
+            isoColumn.DataSource = supportedIsos;
+            isoColumn.FlatStyle = FlatStyle.Flat;
+            grid.Columns.Add(isoColumn);
+            Controls.Add(grid);
+
+            addButton = MakeDialogButton("Bereik toevoegen", false);
+            addButton.SetBounds(24, ClientSize.Height - 72, 150, 42);
+            addButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            addButton.Click += delegate { AddRange(); };
+            Controls.Add(addButton);
+
+            removeButton = MakeDialogButton("Bereik verwijderen", false);
+            removeButton.SetBounds(182, ClientSize.Height - 72, 158, 42);
+            removeButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            removeButton.Click += delegate { RemoveRange(); };
+            Controls.Add(removeButton);
+
+            Button cancelButton = MakeDialogButton("Terug", false);
+            cancelButton.SetBounds(
+                ClientSize.Width - 434, ClientSize.Height - 72, 220, 42);
+            cancelButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            cancelButton.Click += delegate
+            {
+                DialogResult = DialogResult.Cancel;
+                Close();
+            };
+            Controls.Add(cancelButton);
+
+            saveButton = MakeDialogButton("Opslaan en activeren", true);
+            saveButton.SetBounds(
+                ClientSize.Width - 206, ClientSize.Height - 72, 182, 42);
+            saveButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            saveButton.Click += delegate { SaveAndClose(); };
+            Controls.Add(saveButton);
+
+            coverSettingsPanel = new Panel();
+            coverSettingsPanel.BackColor = Background;
+            coverSettingsPanel.SetBounds(24, 68,
+                ClientSize.Width - 48, ClientSize.Height - 160);
+            coverSettingsPanel.Anchor = AnchorStyles.Top |
+                AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            coverSettingsPanel.Visible = false;
+            Controls.Add(coverSettingsPanel);
+
+            Panel coverModeCard = new Panel();
+            coverModeCard.BackColor = Card;
+            coverModeCard.BorderStyle = BorderStyle.FixedSingle;
+            coverModeCard.SetBounds(0, 0, coverSettingsPanel.Width, 100);
+            coverModeCard.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            coverSettingsPanel.Controls.Add(coverModeCard);
+
+            defaultCoverText = new RadioButton();
+            defaultCoverText.Text = "Standaardtekst · alle booths";
+            defaultCoverText.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            defaultCoverText.ForeColor = TextPrimary;
+            defaultCoverText.SetBounds(16, 12, 290, 28);
+            coverModeCard.Controls.Add(defaultCoverText);
+
+            customCoverText = new RadioButton();
+            customCoverText.Text = "Eigen tekst · deze booth";
+            customCoverText.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            customCoverText.ForeColor = TextPrimary;
+            customCoverText.SetBounds(350, 12, 300, 28);
+            coverModeCard.Controls.Add(customCoverText);
+
+            Label coverExplanation = MakeDialogLabel(
+                "De standaardtekst wordt via de software-update op alle " +
+                "booths gebruikt. Een eigen tekst geldt alleen hier.",
+                9, FontStyle.Regular, TextMuted);
+            coverExplanation.SetBounds(18, 46,
+                coverModeCard.Width - 36, 44);
+            coverExplanation.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            coverModeCard.Controls.Add(coverExplanation);
+
+            Panel coverEditorCard = new Panel();
+            coverEditorCard.BackColor = Card;
+            coverEditorCard.BorderStyle = BorderStyle.FixedSingle;
+            coverEditorCard.SetBounds(0, 114,
+                coverSettingsPanel.Width, 160);
+            coverEditorCard.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            coverSettingsPanel.Controls.Add(coverEditorCard);
+
+            Label coverTitleCaption = MakeDialogLabel(
+                "Koptekst", 9, FontStyle.Bold, TextPrimary);
+            coverTitleCaption.SetBounds(16, 10, 96, 32);
+            coverEditorCard.Controls.Add(coverTitleCaption);
+
+            coverTitleInput = new TextBox();
+            coverTitleInput.Font = new Font("Segoe UI", 11, FontStyle.Regular);
+            coverTitleInput.MaxLength = 60;
+            coverTitleInput.SetBounds(120, 10,
+                coverEditorCard.Width - 138, 32);
+            coverTitleInput.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            coverTitleInput.AccessibleName = "Koptekst volledig scherm";
+            coverEditorCard.Controls.Add(coverTitleInput);
+
+            Label coverMessageCaption = MakeDialogLabel(
+                "Bericht", 9, FontStyle.Bold, TextPrimary);
+            coverMessageCaption.SetBounds(16, 54, 96, 32);
+            coverEditorCard.Controls.Add(coverMessageCaption);
+
+            coverMessageInput = new TextBox();
+            coverMessageInput.Font = new Font("Segoe UI", 10, FontStyle.Regular);
+            coverMessageInput.Multiline = true;
+            coverMessageInput.AcceptsReturn = true;
+            coverMessageInput.ScrollBars = ScrollBars.Vertical;
+            coverMessageInput.MaxLength = 240;
+            coverMessageInput.SetBounds(120, 54,
+                coverEditorCard.Width - 138, 88);
+            coverMessageInput.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            coverMessageInput.AccessibleName = "Bericht volledig scherm";
+            coverEditorCard.Controls.Add(coverMessageInput);
+
+            Panel coverPreviewCard = new Panel();
+            coverPreviewCard.BackColor = Card;
+            coverPreviewCard.BorderStyle = BorderStyle.FixedSingle;
+            coverPreviewCard.SetBounds(0, 288, coverSettingsPanel.Width,
+                Math.Max(110, coverSettingsPanel.Height - 288));
+            coverPreviewCard.Anchor = AnchorStyles.Top |
+                AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            coverSettingsPanel.Controls.Add(coverPreviewCard);
+
+            Label coverPreviewCaption = MakeDialogLabel(
+                "Voorbeeld volledig scherm", 9, FontStyle.Bold, TextMuted);
+            coverPreviewCaption.SetBounds(14, 6, 220, 24);
+            coverPreviewCard.Controls.Add(coverPreviewCaption);
+
+            coverPreviewTitle = MakeDialogLabel(
+                "", 22, FontStyle.Bold, Color.FromArgb(31, 38, 58));
+            coverPreviewTitle.TextAlign = ContentAlignment.BottomCenter;
+            coverPreviewTitle.SetBounds(20, 28,
+                coverPreviewCard.Width - 40, 46);
+            coverPreviewTitle.Anchor = AnchorStyles.Top |
+                AnchorStyles.Left | AnchorStyles.Right;
+            coverPreviewCard.Controls.Add(coverPreviewTitle);
+
+            coverPreviewMessage = MakeDialogLabel(
+                "", 12, FontStyle.Bold, Color.FromArgb(73, 82, 105));
+            coverPreviewMessage.TextAlign = ContentAlignment.TopCenter;
+            coverPreviewMessage.SetBounds(20, 76,
+                coverPreviewCard.Width - 40,
+                Math.Max(46, coverPreviewCard.Height - 82));
+            coverPreviewMessage.Anchor = AnchorStyles.Top |
+                AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            coverPreviewCard.Controls.Add(coverPreviewMessage);
+
+            AcceptButton = saveButton;
+            CancelButton = cancelButton;
+            defaultProfile.CheckedChanged += delegate { ProfileChanged(); };
+            customProfile.CheckedChanged += delegate { ProfileChanged(); };
+            previewLightInput.ValueChanged += delegate { UpdatePreview(); };
+            previewRange.LightValueChanged += delegate
+            {
+                int value = previewRange.LightValue;
+                if (value >= previewLightInput.Minimum &&
+                    value <= previewLightInput.Maximum &&
+                    previewLightInput.Value != value)
+                    previewLightInput.Value = value;
+            };
+            stabilitySecondsInput.ValueChanged += delegate { MarkDirty(); };
+            defaultCoverText.CheckedChanged += delegate
+            {
+                CoverTextModeChanged();
+            };
+            customCoverText.CheckedChanged += delegate
+            {
+                CoverTextModeChanged();
+            };
+            coverTitleInput.TextChanged += delegate
+            {
+                CoverTextChanged();
+            };
+            coverMessageInput.TextChanged += delegate
+            {
+                CoverTextChanged();
+            };
+            grid.CellValueChanged += delegate
+            {
+                MarkDirty();
+                UpdatePreview();
+            };
+            grid.CurrentCellDirtyStateChanged += delegate
+            {
+                if (grid.IsCurrentCellDirty)
+                    grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            };
+            if (useCustomMapping)
+                customProfile.Checked = true;
+            else
+                defaultProfile.Checked = true;
+            if (useCustomCoverText)
+                customCoverText.Checked = true;
+            else
+                defaultCoverText.Checked = true;
+            RenderRows();
+            RefreshCoverTextControls();
+            ShowSettingsSection(false);
+            initialized = true;
+            dirty = false;
+            UpdatePreview();
+            UpdateSaveState();
+            FormClosed += delegate
+            {
+                updateStatusTimer.Stop();
+                updateStatusTimer.Dispose();
+            };
+        }
+
+        private void StartUpdateCheck()
+        {
+            try
+            {
+                if (!File.Exists(updaterExecutablePath))
+                    throw new FileNotFoundException(
+                        "De automatische updater is niet geïnstalleerd.");
+                try
+                {
+                    if (File.Exists(updaterStatusPath))
+                        File.Delete(updaterStatusPath);
+                }
+                catch { }
+
+                updateCheckStartedAtUtc = DateTime.UtcNow;
+                SetUpdateButtonState(
+                    "Controleren...", TextMuted, false,
+                    "GitHub wordt gecontroleerd op een nieuwere versie.");
+                updateStatusTimer.Start();
+                Process.Start(new ProcessStartInfo {
+                    FileName = updaterExecutablePath,
+                    Arguments = "--check-now",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Path.GetDirectoryName(
+                        updaterExecutablePath)
+                });
+            }
+            catch (Exception exception)
+            {
+                SetUpdateButtonState(
+                    "Opnieuw proberen", Color.FromArgb(186, 36, 36),
+                    true, exception.Message);
+            }
+        }
+
+        private void RefreshUpdateStatus()
+        {
+            if (updateCheckStartedAtUtc != DateTime.MinValue &&
+                DateTime.UtcNow - updateCheckStartedAtUtc >
+                    TimeSpan.FromMinutes(2))
+            {
+                updateStatusTimer.Stop();
+                SetUpdateButtonState(
+                    "Opnieuw proberen", Color.FromArgb(186, 36, 36),
+                    true, "De updatecontrole duurde te lang.");
+                return;
+            }
+            if (!File.Exists(updaterStatusPath))
+                return;
+
+            Dictionary<string, string> values =
+                new Dictionary<string, string>(
+                    StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (string line in File.ReadAllLines(updaterStatusPath))
+                {
+                    int separator = line.IndexOf('=');
+                    if (separator <= 0)
+                        continue;
+                    values[line.Substring(0, separator)] =
+                        line.Substring(separator + 1);
+                }
+            }
+            catch
+            {
+                return;
+            }
+
+            string state;
+            if (!values.TryGetValue("State", out state))
+                return;
+            string message;
+            if (!values.TryGetValue("Message", out message))
+                message = "";
+            string available;
+            if (!values.TryGetValue("AvailableVersion", out available))
+                available = "";
+
+            if (String.Equals(state, "checking",
+                StringComparison.OrdinalIgnoreCase))
+                SetUpdateButtonState(
+                    "Controleren...", TextMuted, false, message);
+            else if (String.Equals(state, "downloading",
+                StringComparison.OrdinalIgnoreCase))
+                SetUpdateButtonState(
+                    "Downloaden " + available, Accent, false, message);
+            else if (String.Equals(state, "installing",
+                StringComparison.OrdinalIgnoreCase))
+                SetUpdateButtonState(
+                    "Installeren " + available, Accent, false, message);
+            else if (String.Equals(state, "current",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                updateStatusTimer.Stop();
+                SetUpdateButtonState(
+                    "Versie is actueel", Color.FromArgb(34, 132, 67),
+                    true, message);
+            }
+            else if (String.Equals(state, "error",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                updateStatusTimer.Stop();
+                SetUpdateButtonState(
+                    "Opnieuw proberen", Color.FromArgb(186, 36, 36),
+                    true, message);
+            }
+        }
+
+        private void SetUpdateButtonState(
+            string text, Color color, bool enabled, string description)
+        {
+            updateButton.Text = text;
+            updateButton.Enabled = enabled;
+            updateButton.ForeColor = color;
+            updateButton.BackColor = Card;
+            updateButton.FlatAppearance.BorderColor = color;
+            updateButton.AccessibleDescription = description;
+            boothAndVersionLabel.Text =
+                "Booth: " + boothName + "  ·  Versie " +
+                BuildInfo.Version;
+        }
+
+        protected override bool ProcessCmdKey(ref Message message, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.S))
+            {
+                SaveAndClose();
+                return true;
+            }
+            return base.ProcessCmdKey(ref message, keyData);
+        }
+
+        private void MarkDirty()
+        {
+            if (!initialized || rendering)
+                return;
+            dirty = true;
+            UpdateSaveState();
+        }
+
+        private void UpdateSaveState()
+        {
+            if (saveButton == null)
+                return;
+            saveButton.Enabled = initialized && dirty;
+            saveButton.BackColor = saveButton.Enabled
+                ? Accent
+                : Color.FromArgb(225, 228, 233);
+            saveButton.ForeColor = saveButton.Enabled
+                ? Color.White
+                : Color.FromArgb(112, 119, 128);
+        }
+
+        private void ShowSettingsSection(bool fullpage)
+        {
+            showingCoverSettings = fullpage;
+            profileCard.Visible = !fullpage;
+            previewCard.Visible = !fullpage;
+            grid.Visible = !fullpage;
+            coverSettingsPanel.Visible = fullpage;
+            if (fullpage)
+            {
+                addButton.Visible = false;
+                removeButton.Visible = false;
+                coverSettingsPanel.BringToFront();
+            }
+            else
+            {
+                addButton.Visible = customProfile.Checked;
+                removeButton.Visible = customProfile.Checked;
+            }
+            SetSectionButtonStyle(isoSettingsTab, !fullpage);
+            SetSectionButtonStyle(coverSettingsTab, fullpage);
+            saveButton.BringToFront();
+        }
+
+        private static void SetSectionButtonStyle(Button button, bool active)
+        {
+            button.FlatAppearance.BorderSize = active ? 0 : 1;
+            button.BackColor = active ? Accent : Card;
+            button.ForeColor = active ? Color.White : Accent;
+        }
+
+        private void CoverTextModeChanged()
+        {
+            if (renderingCoverText)
+                return;
+            RefreshCoverTextControls();
+            MarkDirty();
+        }
+
+        private void CoverTextChanged()
+        {
+            if (renderingCoverText)
+                return;
+            if (customCoverText.Checked)
+            {
+                draftCustomCoverTitle = coverTitleInput.Text;
+                draftCustomCoverMessage = coverMessageInput.Text;
+                MarkDirty();
+            }
+            UpdateCoverTextPreview();
+        }
+
+        private void RefreshCoverTextControls()
+        {
+            renderingCoverText = true;
+            try
+            {
+                bool custom = customCoverText.Checked;
+                coverTitleInput.Enabled = custom;
+                coverMessageInput.Enabled = custom;
+                coverTitleInput.Text = custom
+                    ? draftCustomCoverTitle : defaultCoverTitle;
+                coverMessageInput.Text = custom
+                    ? draftCustomCoverMessage : defaultCoverMessage;
+            }
+            finally
+            {
+                renderingCoverText = false;
+            }
+            UpdateCoverTextPreview();
+        }
+
+        private void UpdateCoverTextPreview()
+        {
+            if (coverPreviewTitle == null || coverPreviewMessage == null)
+                return;
+            coverPreviewTitle.Text = coverTitleInput.Text;
+            coverPreviewMessage.Text = coverMessageInput.Text;
+        }
+
+        private void UpdatePreview()
+        {
+            if (previewRange == null || previewLightInput == null)
+                return;
+            List<IsoBand> bands = GetPreviewBands();
+            int light = (int)previewLightInput.Value;
+            int iso = -1;
+            foreach (IsoBand band in bands)
+            {
+                if (light <= band.MaximumLight)
+                {
+                    iso = band.Iso;
+                    break;
+                }
+            }
+            previewRange.UpdateData(bands, light, iso);
+            previewText.Text = iso > 0
+                ? "Licht " + light + " → ISO " + iso
+                : "Ongeldige indeling";
+            previewText.ForeColor = iso > 0
+                ? Color.FromArgb(20, 102, 196)
+                : Color.FromArgb(186, 36, 36);
+        }
+
+        private List<IsoBand> GetPreviewBands()
+        {
+            if (!customProfile.Checked || grid.Rows.Count == 0)
+                return CloneBands(defaultBands);
+            try
+            {
+                List<IsoBand> result = new List<IsoBand>();
+                int previous = -1;
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    int maximum = Convert.ToInt32(row.Cells[1].Value);
+                    int iso = Convert.ToInt32(row.Cells[2].Value);
+                    if (maximum <= previous || maximum > 100)
+                        throw new InvalidOperationException();
+                    result.Add(new IsoBand(maximum, iso));
+                    previous = maximum;
+                }
+                if (result.Count == 0 || previous != 100)
+                    throw new InvalidOperationException();
+                return result;
+            }
+            catch
+            {
+                return CloneBands(CustomBands);
+            }
+        }
+
+        private void ProfileChanged()
+        {
+            if (rendering)
+                return;
+            if (renderedCustom && !customProfile.Checked)
+                CaptureCustomBands(false);
+            RenderRows();
+            MarkDirty();
+        }
+
+        private void RenderRows()
+        {
+            rendering = true;
+            try
+            {
+                bool custom = customProfile.Checked;
+                renderedCustom = custom;
+                List<IsoBand> source = custom ? CustomBands : defaultBands;
+                grid.Rows.Clear();
+                int lower = 0;
+                for (int index = 0; index < source.Count; index++)
+                {
+                    IsoBand band = source[index];
+                    int row = grid.Rows.Add(lower, band.MaximumLight, band.Iso);
+                    grid.Rows[row].Cells[0].ReadOnly = true;
+                    grid.Rows[row].Cells[1].ReadOnly =
+                        !custom || index == source.Count - 1;
+                    lower = band.MaximumLight + 1;
+                }
+                grid.ReadOnly = !custom;
+                if (custom)
+                {
+                    grid.Columns[0].ReadOnly = true;
+                    grid.Columns[1].ReadOnly = false;
+                    grid.Rows[grid.Rows.Count - 1].Cells[1].ReadOnly = true;
+                }
+                ((DataGridViewComboBoxColumn)grid.Columns[2]).DisplayStyle = custom
+                    ? DataGridViewComboBoxDisplayStyle.DropDownButton
+                    : DataGridViewComboBoxDisplayStyle.Nothing;
+                addButton.Enabled = custom && source.Count < 8;
+                removeButton.Enabled = custom && source.Count > 1;
+                addButton.Visible = custom && !showingCoverSettings;
+                removeButton.Visible = custom && !showingCoverSettings;
+                explanation.Text = custom
+                    ? "Dit profiel wordt alleen op deze booth opgeslagen. " +
+                      "De bereiken sluiten automatisch op elkaar aan."
+                    : "Dit standaardprofiel wordt vanuit de centrale " +
+                      "software-update voor alle booths beheerd.";
+                grid.ClearSelection();
+                UpdatePreview();
+            }
+            finally
+            {
+                rendering = false;
+            }
+        }
+
+        private bool CaptureCustomBands(bool showError)
+        {
+            try
+            {
+                grid.EndEdit();
+                List<IsoBand> bands = new List<IsoBand>();
+                int previous = -1;
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    int maximum = Convert.ToInt32(row.Cells[1].Value);
+                    int iso = Convert.ToInt32(row.Cells[2].Value);
+                    if (maximum <= previous || maximum > 100 ||
+                        Array.IndexOf(supportedIsos, iso) < 0)
+                        throw new InvalidOperationException();
+                    bands.Add(new IsoBand(maximum, iso));
+                    previous = maximum;
+                }
+                if (bands.Count < 1 || bands.Count > 8 || previous != 100)
+                    throw new InvalidOperationException();
+                CustomBands = bands;
+                return true;
+            }
+            catch
+            {
+                if (showError)
+                    MessageBox.Show(this,
+                        "Controleer de lichtbereiken. Ze moeten zonder gaten " +
+                        "oplopen van 0 tot en met 100.",
+                        "Ongeldig ISO-profiel", MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                return false;
+            }
+        }
+
+        private void AddRange()
+        {
+            if (!customProfile.Checked || !CaptureCustomBands(true) ||
+                CustomBands.Count >= 8)
+                return;
+            int last = CustomBands.Count - 1;
+            int lower = last == 0 ? 0 : CustomBands[last - 1].MaximumLight + 1;
+            if (lower >= 100)
+            {
+                MessageBox.Show(this, "Er is geen ruimte voor nog een bereik.",
+                    "Bereik toevoegen", MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+            int split = (lower + 99) / 2;
+            CustomBands.Insert(last,
+                new IsoBand(split, CustomBands[last].Iso));
+            RenderRows();
+            grid.ClearSelection();
+            grid.Rows[last].Selected = true;
+            MarkDirty();
+        }
+
+        private void RemoveRange()
+        {
+            if (!customProfile.Checked || !CaptureCustomBands(true) ||
+                CustomBands.Count <= 1)
+                return;
+            int selected = grid.SelectedRows.Count > 0
+                ? grid.SelectedRows[0].Index
+                : CustomBands.Count - 2;
+            selected = Math.Max(0, Math.Min(CustomBands.Count - 1, selected));
+            CustomBands.RemoveAt(selected);
+            CustomBands[CustomBands.Count - 1].MaximumLight = 100;
+            RenderRows();
+            MarkDirty();
+        }
+
+        private void SaveAndClose()
+        {
+            if (!dirty)
+                return;
+            if (customProfile.Checked && !CaptureCustomBands(true))
+                return;
+            if (customCoverText.Checked &&
+                (String.IsNullOrWhiteSpace(draftCustomCoverTitle) ||
+                 String.IsNullOrWhiteSpace(draftCustomCoverMessage)))
+            {
+                ShowSettingsSection(true);
+                MessageBox.Show(this,
+                    "Vul zowel de koptekst als het bericht voor het " +
+                    "volledige scherm in.",
+                    "Tekst ontbreekt", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+            UseCustomMapping = customProfile.Checked;
+            UseCustomCoverText = customCoverText.Checked;
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+
+        private static List<IsoBand> CloneBands(List<IsoBand> source)
+        {
+            List<IsoBand> copy = new List<IsoBand>();
+            foreach (IsoBand band in source)
+                copy.Add(band.Clone());
+            return copy;
+        }
+
+        private static Label MakeDialogLabel(
+            string text, float size, FontStyle style, Color color)
+        {
+            Label label = new Label();
+            label.Text = text;
+            label.AutoSize = false;
+            label.Font = new Font("Segoe UI", size, style);
+            label.ForeColor = color;
+            label.BackColor = Color.Transparent;
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            return label;
+        }
+
+        private static Button MakeDialogButton(string text, bool primary)
+        {
+            Button button = new Button();
+            button.Text = text;
+            button.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = primary ? 0 : 1;
+            button.FlatAppearance.BorderColor = Accent;
+            button.BackColor = primary ? Accent : Card;
+            button.ForeColor = primary ? Color.White : Accent;
+            button.UseVisualStyleBackColor = false;
+            button.MinimumSize = new Size(44, 42);
+            button.AccessibleRole = AccessibleRole.PushButton;
+            return button;
+        }
+    }
+
     internal sealed class ManualCoverControlForm : Form
     {
         internal ManualCoverControlForm(
@@ -2688,9 +5049,15 @@ namespace Jvdp.LightDarkroomOverlay
     }
     internal sealed class ActionCoverForm : Form
     {
-        internal ActionCoverForm(Rectangle bounds)
+        private readonly string coverTitle;
+        private readonly string coverMessage;
+
+        internal ActionCoverForm(
+            Rectangle bounds, string title, string message)
         {
             Text = "JvdP Camera Screen";
+            coverTitle = title;
+            coverMessage = message;
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             Bounds = bounds;
@@ -2728,40 +5095,74 @@ namespace Jvdp.LightDarkroomOverlay
             args.Graphics.TextRenderingHint =
                 System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
-            using (Font titleFont = new Font(
-                "Britannic Bold", 46, FontStyle.Regular))
-            using (Font detailFont = new Font(
-                "Britannic Bold", 27, FontStyle.Regular))
+            float horizontalMargin = Math.Max(
+                36f, ClientSize.Width * 0.07f);
+            float verticalMargin = Math.Max(
+                32f, ClientSize.Height * 0.07f);
+            float contentWidth = Math.Max(
+                1f, ClientSize.Width - horizontalMargin * 2f);
+            float contentHeight = Math.Max(
+                1f, ClientSize.Height - verticalMargin * 2f);
+            float gap = Math.Max(16f, contentHeight * 0.035f);
+            float titleHeight = Math.Max(
+                54f, (contentHeight - gap) * 0.34f);
+            float messageHeight = Math.Max(
+                54f, contentHeight - titleHeight - gap);
+            RectangleF titleArea = new RectangleF(
+                horizontalMargin, verticalMargin,
+                contentWidth, titleHeight);
+            RectangleF detailArea = new RectangleF(
+                horizontalMargin, verticalMargin + titleHeight + gap,
+                contentWidth, messageHeight);
+
+            using (StringFormat centered = CreateCenteredTextFormat())
+            using (Font titleFont = CreateFittedFont(
+                args.Graphics, coverTitle, "Britannic Bold",
+                FontStyle.Regular, 54f, 15f, titleArea.Size, centered))
+            using (Font detailFont = CreateFittedFont(
+                args.Graphics, coverMessage, "Britannic Bold",
+                FontStyle.Regular, 34f, 13f, detailArea.Size, centered))
             using (Brush titleBrush = new SolidBrush(
                 Color.FromArgb(31, 38, 58)))
             using (Brush detailBrush = new SolidBrush(
                 Color.FromArgb(73, 82, 105)))
-            using (StringFormat centered = new StringFormat())
             {
-                centered.Alignment = StringAlignment.Center;
-                centered.LineAlignment = StringAlignment.Center;
-
-                string title = "Please wait!";
-                string detail =
-                    "I'm fine-tuning the lighting" + Environment.NewLine +
-                    "so you look absolutely amazing!";
-
-                float blockHeight = 230f;
-                float blockTop = (ClientSize.Height - blockHeight) / 2f;
-                RectangleF titleArea = new RectangleF(
-                    50f, blockTop,
-                    Math.Max(0f, ClientSize.Width - 100f), 82f);
-                RectangleF detailArea = new RectangleF(
-                    50f, blockTop + 90f,
-                    Math.Max(0f, ClientSize.Width - 100f), 132f);
-
                 args.Graphics.DrawString(
-                    title, titleFont, titleBrush,
+                    coverTitle, titleFont, titleBrush,
                     titleArea, centered);
                 args.Graphics.DrawString(
-                    detail, detailFont, detailBrush,
+                    coverMessage, detailFont, detailBrush,
                     detailArea, centered);
             }
+        }
+
+        private static StringFormat CreateCenteredTextFormat()
+        {
+            StringFormat format = new StringFormat();
+            format.Alignment = StringAlignment.Center;
+            format.LineAlignment = StringAlignment.Center;
+            format.Trimming = StringTrimming.None;
+            return format;
+        }
+
+        private static Font CreateFittedFont(
+            Graphics graphics, string text, string family,
+            FontStyle style, float maximumSize, float minimumSize,
+            SizeF available, StringFormat format)
+        {
+            string value = String.IsNullOrEmpty(text) ? " " : text;
+            for (float size = maximumSize; size >= minimumSize; size -= 1f)
+            {
+                Font candidate = new Font(family, size, style);
+                SizeF measured = graphics.MeasureString(
+                    value, candidate,
+                    Math.Max(1, (int)Math.Floor(available.Width)), format);
+                if (measured.Width <= available.Width + 1f &&
+                    measured.Height <= available.Height + 1f)
+                    return candidate;
+                candidate.Dispose();
+            }
+            return new Font(family, minimumSize, style);
         }
     }
     internal sealed class ComboItem
@@ -2808,6 +5209,8 @@ namespace Jvdp.LightDarkroomOverlay
 
     internal static class Program
     {
+        private const int WmActivateExistingInstance = 0x8001;
+
         [DllImport("user32.dll")]
         private static extern bool SetProcessDpiAwarenessContext(
             IntPtr dpiContext);
@@ -2815,8 +5218,16 @@ namespace Jvdp.LightDarkroomOverlay
         [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr FindWindow(
+            string className, string windowName);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(
+            IntPtr handle, uint message, IntPtr wParam, IntPtr lParam);
+
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
             try
             {
@@ -2829,7 +5240,43 @@ namespace Jvdp.LightDarkroomOverlay
             }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new OverlayForm());
+            bool startInTray = Array.Exists(
+                args, delegate(string value)
+                {
+                    return String.Equals(value, "--startup",
+                        StringComparison.OrdinalIgnoreCase);
+                });
+            using (Mutex instanceMutex = new Mutex(
+                false, @"Local\JvDPLichtregeling"))
+            {
+                bool ownsInstance = false;
+                try
+                {
+                    ownsInstance = instanceMutex.WaitOne(0, false);
+                }
+                catch (AbandonedMutexException)
+                {
+                    ownsInstance = true;
+                }
+                if (!ownsInstance)
+                {
+                    IntPtr existing = FindWindow(
+                        null, "JvdP Lichtregeling");
+                    if (existing != IntPtr.Zero)
+                        PostMessage(existing,
+                            WmActivateExistingInstance,
+                            IntPtr.Zero, IntPtr.Zero);
+                    return;
+                }
+                try
+                {
+                    Application.Run(new OverlayForm(startInTray));
+                }
+                finally
+                {
+                    instanceMutex.ReleaseMutex();
+                }
+            }
         }
     }
 }

@@ -15,7 +15,8 @@ namespace Jvdp.LightDarkroomInstaller
                 if (runKey == null)
                     throw new InvalidOperationException(
                         "Windows automatisch starten kon niet worden ingesteld.");
-                runKey.SetValue(RunValueName, Quote(installedExe),
+                runKey.SetValue(RunValueName,
+                    Quote(installedExe) + " --startup",
                     RegistryValueKind.String);
                 runKey.SetValue(UpdaterRunValueName,
                     Quote(installedUpdater), RegistryValueKind.String);

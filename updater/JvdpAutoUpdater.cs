@@ -31,6 +31,8 @@ namespace Jvdp.AutoUpdater
         private const string InstallerAsset =
             "JvdP-Photobooth-Lichtsensor-Installatie.exe";
         private const string ChecksumsAsset = "SHA256SUMS.txt";
+        private const string CheckNowEventName =
+            @"Local\JvdPAutoUpdaterCheckNow";
         private static readonly string LocalRoot = Path.Combine(
             Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData),
@@ -44,6 +46,8 @@ namespace Jvdp.AutoUpdater
             Path.Combine(LocalRoot, "pending-release-tag.txt");
         private static readonly string LogPath =
             Path.Combine(LocalRoot, "updater.log");
+        private static readonly string StatusPath =
+            Path.Combine(LocalRoot, "updater-status.txt");
 
         [STAThread]
         private static int Main(string[] args)
@@ -54,6 +58,10 @@ namespace Jvdp.AutoUpdater
             if (HasFlag(args, "--configure"))
                 return Configure();
 
+            bool requestedNow = HasFlag(args, "--check-now");
+            if (requestedNow && SignalRunningUpdater())
+                return 0;
+
             bool once = HasFlag(args, "--once");
             bool ownsMutex;
             using (Mutex mutex = new Mutex(
@@ -62,23 +70,47 @@ namespace Jvdp.AutoUpdater
                 if (!ownsMutex)
                     return 0;
 
-                do
+                using (EventWaitHandle checkNowEvent = new EventWaitHandle(
+                    false, EventResetMode.AutoReset, CheckNowEventName))
                 {
-                    try
+                    do
                     {
-                        if (CheckForUpdate())
-                            return 0;
-                    }
-                    catch (Exception exception)
-                    {
-                        Log("Update check failed: " + exception.Message);
-                    }
+                        try
+                        {
+                            if (CheckForUpdate())
+                                return 0;
+                        }
+                        catch (Exception exception)
+                        {
+                            WriteStatus("error", "",
+                                "Updatecontrole mislukt: " +
+                                exception.Message);
+                            Log("Update check failed: " + exception.Message);
+                        }
 
-                    if (once)
-                        return 0;
-                    Thread.Sleep(TimeSpan.FromMinutes(30));
+                        if (once)
+                            return 0;
+                        checkNowEvent.WaitOne(TimeSpan.FromMinutes(30));
+                    }
+                    while (true);
                 }
-                while (true);
+            }
+        }
+
+        private static bool SignalRunningUpdater()
+        {
+            try
+            {
+                using (EventWaitHandle checkNowEvent =
+                    EventWaitHandle.OpenExisting(CheckNowEventName))
+                {
+                    checkNowEvent.Set();
+                    return true;
+                }
+            }
+            catch (WaitHandleCannotBeOpenedException)
+            {
+                return false;
             }
         }
 
@@ -169,10 +201,15 @@ namespace Jvdp.AutoUpdater
         private static bool CheckForUpdate()
         {
             string channel = LoadChannel();
+            WriteStatus("checking", "", "Controleren op updates...");
             GitHubRelease release = GetRelease(channel);
             if (release == null || release.draft ||
                 String.IsNullOrWhiteSpace(release.tag_name))
+            {
+                WriteStatus("current", "",
+                    "Deze versie is actueel.");
                 return false;
+            }
             if (!Regex.IsMatch(release.tag_name, @"^[0-9A-Za-z._-]+$"))
                 throw new InvalidDataException("The release tag is invalid.");
 
@@ -181,13 +218,21 @@ namespace Jvdp.AutoUpdater
                 : "v" + BuildInfo.Version;
             if (String.Equals(installedTag, release.tag_name,
                 StringComparison.OrdinalIgnoreCase))
+            {
+                WriteStatus("current", release.tag_name,
+                    "Deze versie is actueel.");
                 return false;
+            }
 
             Version available = ParseVersion(release.tag_name);
             Version installed = ParseVersion(installedTag);
             if (available != null && installed != null &&
                 available < installed)
+            {
+                WriteStatus("current", release.tag_name,
+                    "Deze versie is nieuwer dan de gepubliceerde versie.");
                 return false;
+            }
 
             GitHubAsset installer = FindAsset(release, InstallerAsset);
             GitHubAsset checksums = FindAsset(release, ChecksumsAsset);
@@ -195,6 +240,8 @@ namespace Jvdp.AutoUpdater
                 throw new InvalidDataException(
                     "The release is missing the installer or checksums.");
 
+            WriteStatus("downloading", release.tag_name,
+                "Update " + release.tag_name + " downloaden...");
             string checksumText = Encoding.UTF8.GetString(
                 DownloadAsset(checksums));
             string expectedHash = FindExpectedHash(
@@ -212,6 +259,8 @@ namespace Jvdp.AutoUpdater
             File.WriteAllBytes(temporaryInstaller, installerBytes);
             File.WriteAllText(PendingReleaseTagPath, release.tag_name,
                 new UTF8Encoding(false));
+            WriteStatus("installing", release.tag_name,
+                "Update " + release.tag_name + " installeren...");
             Log("Installing release " + release.tag_name +
                 " from channel " + channel + ".");
 
@@ -324,6 +373,35 @@ namespace Jvdp.AutoUpdater
                 value = value.Substring(0, suffix);
             Version parsed;
             return Version.TryParse(value, out parsed) ? parsed : null;
+        }
+
+        private static void WriteStatus(
+            string state, string availableVersion, string message)
+        {
+            try
+            {
+                Directory.CreateDirectory(LocalRoot);
+                string content =
+                    "State=" + SanitizeStatusValue(state) +
+                    Environment.NewLine +
+                    "Checked=" + DateTime.UtcNow.ToString("o") +
+                    Environment.NewLine +
+                    "InstalledVersion=" + BuildInfo.Version +
+                    Environment.NewLine +
+                    "AvailableVersion=" +
+                    SanitizeStatusValue(availableVersion) +
+                    Environment.NewLine +
+                    "Message=" + SanitizeStatusValue(message) +
+                    Environment.NewLine;
+                File.WriteAllText(StatusPath, content,
+                    new UTF8Encoding(false));
+            }
+            catch { }
+        }
+
+        private static string SanitizeStatusValue(string value)
+        {
+            return (value ?? "").Replace("\r", " ").Replace("\n", " ");
         }
 
         private static void Log(string message)

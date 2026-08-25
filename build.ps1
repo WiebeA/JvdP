@@ -87,9 +87,15 @@ Write-BuildInfo $installerBuildInfo 'Jvdp.LightDarkroomInstaller' $false
 $overlayExe = Join-Path $artifactDirectory 'JvdpLightDarkroomOverlay.exe'
 $updaterExe = Join-Path $artifactDirectory 'JvdpAutoUpdater.exe'
 $installerExe = Join-Path $artifactDirectory 'JvdP-Photobooth-Lichtsensor-Installatie.exe'
+$appIcon = Join-Path $projectRoot 'pc-overlay\jvdp-light-bulb.ico'
+
+if (-not (Test-Path -LiteralPath $appIcon)) {
+    throw "Application icon was not found: $appIcon"
+}
 
 & $csc /nologo /target:winexe /optimize+ /platform:anycpu `
     /out:$overlayExe `
+    ("/win32icon:{0}" -f $appIcon) `
     /reference:System.dll `
     /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
@@ -112,6 +118,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
 
 & $csc /nologo /target:winexe /optimize+ /platform:anycpu `
     /out:$installerExe `
+    ("/win32icon:{0}" -f $appIcon) `
     /reference:System.dll `
     /reference:System.Core.dll `
     /reference:System.Windows.Forms.dll `
