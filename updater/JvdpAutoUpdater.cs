@@ -48,6 +48,8 @@ namespace Jvdp.AutoUpdater
             Path.Combine(LocalRoot, "updater.log");
         private static readonly string StatusPath =
             Path.Combine(LocalRoot, "updater-status.txt");
+        private static readonly string ManualRequestPath =
+            Path.Combine(LocalRoot, "manual-update-request.txt");
 
         [STAThread]
         private static int Main(string[] args)
@@ -59,8 +61,12 @@ namespace Jvdp.AutoUpdater
                 return Configure();
 
             bool requestedNow = HasFlag(args, "--check-now");
-            if (requestedNow && SignalRunningUpdater())
-                return 0;
+            if (requestedNow)
+            {
+                MarkManualUpdateRequest();
+                if (SignalRunningUpdater())
+                    return 0;
+            }
 
             bool once = HasFlag(args, "--once");
             bool ownsMutex;
@@ -77,7 +83,8 @@ namespace Jvdp.AutoUpdater
                     {
                         try
                         {
-                            if (CheckForUpdate())
+                            if (CheckForUpdate(
+                                ConsumeManualUpdateRequest()))
                                 return 0;
                         }
                         catch (Exception exception)
@@ -121,6 +128,27 @@ namespace Jvdp.AutoUpdater
                     StringComparison.OrdinalIgnoreCase))
                     return true;
             return false;
+        }
+
+        private static void MarkManualUpdateRequest()
+        {
+            File.WriteAllText(ManualRequestPath,
+                DateTime.UtcNow.ToString("o"), new UTF8Encoding(false));
+        }
+
+        private static bool ConsumeManualUpdateRequest()
+        {
+            try
+            {
+                if (!File.Exists(ManualRequestPath))
+                    return false;
+                File.Delete(ManualRequestPath);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static int Configure()
@@ -198,7 +226,7 @@ namespace Jvdp.AutoUpdater
             return value == "test" ? "test" : "stable";
         }
 
-        private static bool CheckForUpdate()
+        private static bool CheckForUpdate(bool showAfterUpdate)
         {
             string channel = LoadChannel();
             WriteStatus("checking", "", "Controleren op updates...");
@@ -266,9 +294,12 @@ namespace Jvdp.AutoUpdater
 
             Process.Start(new ProcessStartInfo {
                 FileName = temporaryInstaller,
-                Arguments = "--quiet",
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetTempPath()
+                Arguments = showAfterUpdate
+                    ? "--quiet --show-after-update"
+                    : "--quiet",
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetTempPath(),
+                WindowStyle = ProcessWindowStyle.Hidden
             });
             return true;
         }

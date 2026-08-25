@@ -4357,7 +4357,7 @@ namespace Jvdp.LightDarkroomOverlay
             };
             Controls.Add(cancelButton);
 
-            saveButton = MakeDialogButton("Opslaan en activeren", true);
+            saveButton = MakeDialogButton("Opslaan", true);
             saveButton.SetBounds(
                 ClientSize.Width - 206, ClientSize.Height - 72, 182, 42);
             saveButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
@@ -4480,6 +4480,10 @@ namespace Jvdp.LightDarkroomOverlay
                 AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             coverPreviewCard.Controls.Add(coverPreviewMessage);
 
+            BuildResponsiveSettingsLayout(
+                title, stabilityCaption, previewCaption,
+                previewLightCaption, cancelButton);
+
             AcceptButton = saveButton;
             CancelButton = cancelButton;
             defaultProfile.CheckedChanged += delegate { ProfileChanged(); };
@@ -4540,6 +4544,240 @@ namespace Jvdp.LightDarkroomOverlay
                 updateStatusTimer.Stop();
                 updateStatusTimer.Dispose();
             };
+            RefreshUpdateStatus();
+        }
+
+        private void BuildResponsiveSettingsLayout(
+            Label title,
+            Label stabilityCaption,
+            Label previewCaption,
+            Label previewLightCaption,
+            Button cancelButton)
+        {
+            SuspendLayout();
+
+            TableLayoutPanel root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.BackColor = Background;
+            root.Padding = new Padding(24, 8, 24, 12);
+            root.ColumnCount = 1;
+            root.RowCount = 5;
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            TableLayoutPanel header = new TableLayoutPanel();
+            header.AutoSize = true;
+            header.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            header.Dock = DockStyle.Fill;
+            header.Margin = new Padding(0, 0, 0, 6);
+            header.ColumnCount = 2;
+            header.RowCount = 2;
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+
+            FlowLayoutPanel navigation = new FlowLayoutPanel();
+            navigation.AutoSize = true;
+            navigation.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            navigation.Dock = DockStyle.Fill;
+            navigation.FlowDirection = FlowDirection.LeftToRight;
+            navigation.WrapContents = true;
+            navigation.Margin = Padding.Empty;
+
+            title.AutoSize = true;
+            title.Margin = new Padding(0, 5, 16, 4);
+            isoSettingsTab.Size = new Size(118, 42);
+            isoSettingsTab.Margin = new Padding(0, 0, 8, 4);
+            coverSettingsTab.Size = new Size(156, 42);
+            coverSettingsTab.Margin = new Padding(0, 0, 0, 4);
+            navigation.Controls.Add(title);
+            navigation.Controls.Add(isoSettingsTab);
+            navigation.Controls.Add(coverSettingsTab);
+
+            updateButton.AutoSize = true;
+            updateButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            updateButton.MinimumSize = new Size(200, 42);
+            updateButton.Padding = new Padding(12, 0, 12, 0);
+            updateButton.Margin = new Padding(16, 0, 0, 4);
+
+            boothAndVersionLabel.AutoEllipsis = true;
+            boothAndVersionLabel.Dock = DockStyle.Fill;
+            boothAndVersionLabel.Margin = Padding.Empty;
+            boothAndVersionLabel.TextAlign = ContentAlignment.MiddleRight;
+
+            header.Controls.Add(navigation, 0, 0);
+            header.Controls.Add(updateButton, 1, 0);
+            header.Controls.Add(boothAndVersionLabel, 0, 1);
+            header.SetColumnSpan(boothAndVersionLabel, 2);
+
+            profileCard.AutoSize = true;
+            profileCard.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            profileCard.Dock = DockStyle.Fill;
+            profileCard.Margin = new Padding(0, 0, 0, 12);
+            profileCard.Controls.Clear();
+
+            TableLayoutPanel profileLayout = new TableLayoutPanel();
+            profileLayout.AutoSize = true;
+            profileLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            profileLayout.Dock = DockStyle.Fill;
+            profileLayout.Padding = new Padding(16, 8, 16, 10);
+            profileLayout.ColumnCount = 2;
+            profileLayout.RowCount = 2;
+            profileLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            profileLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.AutoSize));
+            profileLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            profileLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+
+            FlowLayoutPanel profileModes = new FlowLayoutPanel();
+            profileModes.AutoSize = true;
+            profileModes.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            profileModes.Dock = DockStyle.Fill;
+            profileModes.FlowDirection = FlowDirection.LeftToRight;
+            profileModes.WrapContents = true;
+            profileModes.Margin = Padding.Empty;
+            defaultProfile.AutoSize = true;
+            defaultProfile.Margin = new Padding(0, 2, 42, 4);
+            customProfile.AutoSize = true;
+            customProfile.Margin = new Padding(0, 2, 0, 4);
+            profileModes.Controls.Add(defaultProfile);
+            profileModes.Controls.Add(customProfile);
+            profileLayout.Controls.Add(profileModes, 0, 0);
+            profileLayout.SetColumnSpan(profileModes, 2);
+
+            explanation.Dock = DockStyle.Fill;
+            explanation.AutoEllipsis = true;
+            explanation.Margin = new Padding(0, 0, 16, 0);
+            profileLayout.Controls.Add(explanation, 0, 1);
+
+            FlowLayoutPanel stability = new FlowLayoutPanel();
+            stability.AutoSize = true;
+            stability.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            stability.Anchor = AnchorStyles.Right;
+            stability.FlowDirection = FlowDirection.LeftToRight;
+            stability.WrapContents = false;
+            stability.Margin = Padding.Empty;
+            stabilityCaption.AutoSize = true;
+            stabilityCaption.Margin = new Padding(0, 8, 10, 0);
+            stabilitySecondsInput.Size = new Size(68, 28);
+            stabilitySecondsInput.Margin = new Padding(0, 4, 0, 0);
+            stability.Controls.Add(stabilityCaption);
+            stability.Controls.Add(stabilitySecondsInput);
+            profileLayout.Controls.Add(stability, 1, 1);
+            profileCard.Controls.Add(profileLayout);
+
+            previewCard.AutoSize = true;
+            previewCard.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            previewCard.Dock = DockStyle.Fill;
+            previewCard.Margin = new Padding(0, 0, 0, 12);
+            previewCard.Controls.Clear();
+
+            TableLayoutPanel previewLayout = new TableLayoutPanel();
+            previewLayout.AutoSize = true;
+            previewLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            previewLayout.Dock = DockStyle.Fill;
+            previewLayout.Padding = new Padding(14, 6, 14, 8);
+            previewLayout.ColumnCount = 4;
+            previewLayout.RowCount = 2;
+            previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            previewLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            previewLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            previewLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+
+            previewCaption.AutoSize = true;
+            previewCaption.Margin = new Padding(0, 6, 28, 0);
+            previewLightCaption.AutoSize = true;
+            previewLightCaption.Margin = new Padding(0, 7, 8, 0);
+            previewLightInput.Size = new Size(70, 28);
+            previewLightInput.Margin = new Padding(0, 3, 18, 0);
+            previewText.Dock = DockStyle.Fill;
+            previewText.AutoEllipsis = true;
+            previewText.Margin = Padding.Empty;
+            previewRange.Dock = DockStyle.Fill;
+            previewRange.Margin = Padding.Empty;
+            previewLayout.Controls.Add(previewCaption, 0, 0);
+            previewLayout.Controls.Add(previewLightCaption, 1, 0);
+            previewLayout.Controls.Add(previewLightInput, 2, 0);
+            previewLayout.Controls.Add(previewText, 3, 0);
+            previewLayout.Controls.Add(previewRange, 0, 1);
+            previewLayout.SetColumnSpan(previewRange, 4);
+            previewCard.Controls.Add(previewLayout);
+
+            grid.Dock = DockStyle.Fill;
+            grid.Margin = new Padding(0, 0, 0, 10);
+
+            TableLayoutPanel footer = new TableLayoutPanel();
+            footer.AutoSize = true;
+            footer.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            footer.Dock = DockStyle.Fill;
+            footer.Margin = Padding.Empty;
+            footer.ColumnCount = 3;
+            footer.RowCount = 1;
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            FlowLayoutPanel rangeActions = new FlowLayoutPanel();
+            rangeActions.AutoSize = true;
+            rangeActions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            rangeActions.FlowDirection = FlowDirection.LeftToRight;
+            rangeActions.WrapContents = false;
+            rangeActions.Margin = Padding.Empty;
+            addButton.AutoSize = true;
+            addButton.MinimumSize = new Size(150, 42);
+            addButton.Padding = new Padding(10, 0, 10, 0);
+            addButton.Margin = new Padding(0, 0, 8, 0);
+            removeButton.AutoSize = true;
+            removeButton.MinimumSize = new Size(158, 42);
+            removeButton.Padding = new Padding(10, 0, 10, 0);
+            removeButton.Margin = Padding.Empty;
+            rangeActions.Controls.Add(addButton);
+            rangeActions.Controls.Add(removeButton);
+
+            FlowLayoutPanel saveActions = new FlowLayoutPanel();
+            saveActions.AutoSize = true;
+            saveActions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            saveActions.FlowDirection = FlowDirection.LeftToRight;
+            saveActions.WrapContents = false;
+            saveActions.Margin = Padding.Empty;
+            cancelButton.AutoSize = true;
+            cancelButton.MinimumSize = new Size(120, 42);
+            cancelButton.Padding = new Padding(14, 0, 14, 0);
+            cancelButton.Margin = new Padding(0, 0, 8, 0);
+            saveButton.AutoSize = true;
+            saveButton.MinimumSize = new Size(140, 42);
+            saveButton.Padding = new Padding(14, 0, 14, 0);
+            saveButton.Margin = Padding.Empty;
+            saveActions.Controls.Add(saveButton);
+            saveActions.Controls.Add(cancelButton);
+
+            footer.Controls.Add(rangeActions, 0, 0);
+            footer.Controls.Add(saveActions, 2, 0);
+
+            coverSettingsPanel.Dock = DockStyle.Fill;
+            coverSettingsPanel.Margin = new Padding(0, 0, 0, 10);
+
+            Controls.Clear();
+            root.Controls.Add(header, 0, 0);
+            root.Controls.Add(profileCard, 0, 1);
+            root.Controls.Add(previewCard, 0, 2);
+            root.Controls.Add(grid, 0, 3);
+            root.Controls.Add(coverSettingsPanel, 0, 1);
+            root.SetRowSpan(coverSettingsPanel, 3);
+            root.Controls.Add(footer, 0, 4);
+            Controls.Add(root);
+
+            ResumeLayout(true);
         }
 
         private void StartUpdateCheck()
@@ -4642,6 +4880,14 @@ namespace Jvdp.LightDarkroomOverlay
                     "Versie is actueel", Color.FromArgb(34, 132, 67),
                     true, message);
             }
+            else if (String.Equals(state, "installed",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                updateStatusTimer.Stop();
+                SetUpdateButtonState(
+                    "Versie " + available + " geïnstalleerd",
+                    Color.FromArgb(34, 132, 67), true, message);
+            }
             else if (String.Equals(state, "error",
                 StringComparison.OrdinalIgnoreCase))
             {
@@ -4662,6 +4908,9 @@ namespace Jvdp.LightDarkroomOverlay
             updateButton.FlatAppearance.BorderColor = color;
             updateButton.AccessibleDescription = description;
             boothAndVersionLabel.Text =
+                (String.IsNullOrWhiteSpace(description)
+                    ? ""
+                    : description + "  ·  ") +
                 "Booth: " + boothName + "  ·  Versie " +
                 BuildInfo.Version;
         }

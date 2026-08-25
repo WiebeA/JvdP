@@ -103,7 +103,7 @@ ISO mapping now belongs to the Windows application, not to the ESP. The default
 profile is defined once in the released application and is therefore identical on
 all booths. A booth can switch to a custom profile; that custom mapping is stored
 only on that booth. Selecting or editing a profile has no effect until the operator
-chooses `Opslaan en activeren`. The editor shows both a table and a graphical preview.
+chooses `Opslaan`. The editor shows both a table and a graphical preview.
 Ranges always connect, cover the complete 0–100 light scale and support ISO 100
 through 25600.
 
@@ -120,6 +120,11 @@ After initial setup no manual PC update is needed. The updater:
 3. verifies the installer SHA-256 checksum;
 4. installs it silently;
 5. restarts the tray application and updater.
+
+An update started from the settings page reopens the dashboard visibly after
+installation. Automatic background updates continue to restart into the tray.
+Installer errors are written back to the update status so the settings page can
+show a retry action instead of remaining on `Installeren`.
 
 The default ISO profile ships inside that verified release. Publishing a new stable
 release from the central PC therefore distributes both software changes and a changed

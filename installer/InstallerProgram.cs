@@ -27,6 +27,7 @@ namespace Jvdp.LightDarkroomInstaller
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             bool quiet = HasFlag(args, "--quiet");
+            bool showAfterUpdate = HasFlag(args, "--show-after-update");
             bool uninstall = HasFlag(args, "--uninstall") ||
                 Path.GetFileNameWithoutExtension(Application.ExecutablePath)
                     .IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -46,10 +47,15 @@ namespace Jvdp.LightDarkroomInstaller
                 {
                     return uninstall
                         ? Uninstall(quiet)
-                        : Install(quiet, testDirectory);
+                        : Install(quiet, testDirectory, showAfterUpdate);
                 }
                 catch (Exception exception)
                 {
+                    WriteInstallerStatus("error",
+                        "Installatie mislukt: " + exception.Message);
+                    if (quiet && !uninstall &&
+                        String.IsNullOrWhiteSpace(testDirectory))
+                        TryRestartOverlayAfterFailure();
                     ShowMessage(
                         "De installatie is niet voltooid.\r\n\r\n" +
                         exception.Message,

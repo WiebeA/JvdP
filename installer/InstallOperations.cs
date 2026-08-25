@@ -3,13 +3,15 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace Jvdp.LightDarkroomInstaller
 {
     internal static partial class InstallerProgram
     {
-        private static int Install(bool quiet, string testDirectory)
+        private static int Install(
+            bool quiet, string testDirectory, bool showAfterUpdate)
         {
             bool testMode = !String.IsNullOrWhiteSpace(testDirectory);
             string installDirectory = testMode
@@ -27,8 +29,9 @@ namespace Jvdp.LightDarkroomInstaller
                 Path.Combine(installDirectory, UninstallerName);
 
             Directory.CreateDirectory(installDirectory);
+            bool overlayWasVisible = false;
             if (!testMode)
-                StopRunningComponents();
+                overlayWasVisible = StopRunningComponents();
 
             ExtractPayload(PayloadResource, stagedExe);
             ExtractPayload(UpdaterResource, stagedUpdater);
@@ -36,7 +39,8 @@ namespace Jvdp.LightDarkroomInstaller
             ValidatePortableExecutable(stagedUpdater, "updater");
             ReplaceStagedFile(stagedExe, installedExe);
             ReplaceStagedFile(stagedUpdater, installedUpdater);
-            WriteInstallMetadata(installDirectory);
+            string installedReleaseTag =
+                WriteInstallMetadata(installDirectory);
 
             if (testMode)
             {
@@ -54,7 +58,10 @@ namespace Jvdp.LightDarkroomInstaller
             RegisterUninstaller(installDirectory, installedExe,
                 installedUpdater, installedUninstaller);
             StartComponents(installedExe, installedUpdater,
-                installDirectory, quiet);
+                installDirectory, quiet,
+                showAfterUpdate || overlayWasVisible);
+            WriteInstallerStatus("installed",
+                "Versie " + installedReleaseTag + " is geïnstalleerd.");
             ShowMessage(
                 ProductName + " is geinstalleerd en gestart.\r\n\r\n" +
                 "De lichtsensor-app en automatische updater starten voortaan " +
@@ -127,12 +134,47 @@ namespace Jvdp.LightDarkroomInstaller
         private static void ReplaceStagedFile(
             string stagedPath, string destinationPath)
         {
-            if (File.Exists(destinationPath))
-                File.Delete(destinationPath);
-            File.Move(stagedPath, destinationPath);
+            Exception lastError = null;
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                try
+                {
+                    if (File.Exists(destinationPath))
+                    {
+                        string backupPath = destinationPath + ".backup";
+                        if (File.Exists(backupPath))
+                            File.Delete(backupPath);
+                        File.Replace(stagedPath, destinationPath,
+                            backupPath, true);
+                        try
+                        {
+                            if (File.Exists(backupPath))
+                                File.Delete(backupPath);
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        File.Move(stagedPath, destinationPath);
+                    }
+                    return;
+                }
+                catch (IOException exception)
+                {
+                    lastError = exception;
+                }
+                catch (UnauthorizedAccessException exception)
+                {
+                    lastError = exception;
+                }
+                Thread.Sleep(250);
+            }
+            throw new IOException(
+                "Het actieve programmabestand kon na meerdere pogingen " +
+                "niet veilig worden vervangen.", lastError);
         }
 
-        private static void WriteInstallMetadata(string installDirectory)
+        private static string WriteInstallMetadata(string installDirectory)
         {
             string pendingTagPath =
                 Path.Combine(installDirectory, "pending-release-tag.txt");
@@ -158,17 +200,21 @@ namespace Jvdp.LightDarkroomInstaller
                 releaseTag, new UTF8Encoding(false));
             if (File.Exists(pendingTagPath))
                 File.Delete(pendingTagPath);
+            return releaseTag;
         }
 
         private static void StartComponents(
             string installedExe,
             string installedUpdater,
             string installDirectory,
-            bool quiet)
+            bool quiet,
+            bool showAfterUpdate)
         {
             Process.Start(new ProcessStartInfo {
                 FileName = installedExe,
-                Arguments = quiet ? "--startup" : "",
+                Arguments = showAfterUpdate
+                    ? ""
+                    : (quiet ? "--startup" : ""),
                 WorkingDirectory = installDirectory,
                 UseShellExecute = true
             });
@@ -178,6 +224,52 @@ namespace Jvdp.LightDarkroomInstaller
                 WorkingDirectory = installDirectory,
                 UseShellExecute = true
             });
+        }
+
+        private static void WriteInstallerStatus(
+            string state, string message)
+        {
+            try
+            {
+                string installDirectory = Path.Combine(
+                    Environment.GetFolderPath(
+                        Environment.SpecialFolder.LocalApplicationData),
+                    "JvdP", "LightDarkroomOverlay");
+                Directory.CreateDirectory(installDirectory);
+                string status =
+                    "State=" + state + Environment.NewLine +
+                    "Checked=" + DateTime.UtcNow.ToString("o") +
+                    Environment.NewLine +
+                    "InstalledVersion=" + Version + Environment.NewLine +
+                    "AvailableVersion=v" + Version + Environment.NewLine +
+                    "Message=" + (message ?? "").Replace("\r", " ")
+                        .Replace("\n", " ") + Environment.NewLine;
+                File.WriteAllText(
+                    Path.Combine(installDirectory, "updater-status.txt"),
+                    status, new UTF8Encoding(false));
+            }
+            catch { }
+        }
+
+        private static void TryRestartOverlayAfterFailure()
+        {
+            try
+            {
+                string installDirectory = Path.Combine(
+                    Environment.GetFolderPath(
+                        Environment.SpecialFolder.LocalApplicationData),
+                    "JvdP", "LightDarkroomOverlay");
+                string installedExe = Path.Combine(
+                    installDirectory, InstalledExeName);
+                if (!File.Exists(installedExe))
+                    return;
+                Process.Start(new ProcessStartInfo {
+                    FileName = installedExe,
+                    WorkingDirectory = installDirectory,
+                    UseShellExecute = true
+                });
+            }
+            catch { }
         }
     }
 }

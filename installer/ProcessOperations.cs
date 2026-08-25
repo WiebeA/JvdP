@@ -1,14 +1,19 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Jvdp.LightDarkroomInstaller
 {
     internal static partial class InstallerProgram
     {
-        private static void StopRunningComponents()
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr windowHandle);
+
+        private static bool StopRunningComponents()
         {
+            bool overlayWasVisible = false;
             foreach (Process process in Process.GetProcesses())
             {
                 try
@@ -21,12 +26,21 @@ namespace Jvdp.LightDarkroomInstaller
                         StringComparison.OrdinalIgnoreCase);
                     if (!isOverlay && !isUpdater)
                         continue;
+                    if (isOverlay)
+                    {
+                        process.Refresh();
+                        IntPtr mainWindow = process.MainWindowHandle;
+                        if (mainWindow != IntPtr.Zero &&
+                            IsWindowVisible(mainWindow))
+                            overlayWasVisible = true;
+                    }
                     process.Kill();
                     process.WaitForExit(3000);
                 }
                 catch { }
                 finally { process.Dispose(); }
             }
+            return overlayWasVisible;
         }
 
         private static void ScheduleDirectoryRemoval(string directory)
