@@ -10,8 +10,12 @@ namespace Jvdp.LightDarkroomInstaller
         private const string ProductName = "JvdP Light to Darkroom";
         private const string Version = BuildInfo.Version;
         private const string PayloadResource = "JvdpLightDarkroomOverlay.exe";
+        private const string OverlayConfigResource =
+            "JvdpLightDarkroomOverlay.exe.config";
         private const string UpdaterResource = "JvdpAutoUpdater.exe";
         private const string InstalledExeName = "JvdpLightDarkroomOverlay.exe";
+        private const string InstalledConfigName =
+            "JvdpLightDarkroomOverlay.exe.config";
         private const string UpdaterExeName = "JvdpAutoUpdater.exe";
         private const string UninstallerName = "JvdP-Light-Darkroom-Uninstall.exe";
         private const string RunKeyPath =

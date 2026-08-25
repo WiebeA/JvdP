@@ -107,6 +107,20 @@ chooses `Opslaan`. The editor shows both a table and a graphical preview.
 Ranges always connect, cover the complete 0–100 light scale and support ISO 100
 through 25600.
 
+The default profile uses six gradual ranges:
+
+| Light value | Darkroom ISO |
+| --- | ---: |
+| 0–16 | 3200 |
+| 17–33 | 2500 |
+| 34–50 | 1600 |
+| 51–67 | 1000 |
+| 68–84 | 640 |
+| 85–100 | 400 |
+
+Custom booth profiles remain unchanged during an update. Booths that use the
+default profile automatically receive this mapping with the application release.
+
 Serial-port discovery and Darkroom status inspection run on background threads.
 Slow COM ports or an unresponsive Darkroom control therefore no longer block the
 Windows message loop or make the application show `Not responding`.

@@ -85,12 +85,18 @@ Write-BuildInfo $updaterBuildInfo 'Jvdp.AutoUpdater' $false
 Write-BuildInfo $installerBuildInfo 'Jvdp.LightDarkroomInstaller' $false
 
 $overlayExe = Join-Path $artifactDirectory 'JvdpLightDarkroomOverlay.exe'
+$overlayConfig = Join-Path $artifactDirectory 'JvdpLightDarkroomOverlay.exe.config'
+$overlayConfigSource = Join-Path $projectRoot `
+    'pc-overlay\JvdpLightDarkroomOverlay.exe.config'
 $updaterExe = Join-Path $artifactDirectory 'JvdpAutoUpdater.exe'
 $installerExe = Join-Path $artifactDirectory 'JvdP-Photobooth-Lichtsensor-Installatie.exe'
 $appIcon = Join-Path $projectRoot 'pc-overlay\jvdp-light-bulb.ico'
 
 if (-not (Test-Path -LiteralPath $appIcon)) {
     throw "Application icon was not found: $appIcon"
+}
+if (-not (Test-Path -LiteralPath $overlayConfigSource)) {
+    throw "Application DPI configuration was not found: $overlayConfigSource"
 }
 
 & $csc /nologo /target:winexe /optimize+ /platform:anycpu `
@@ -105,12 +111,14 @@ if (-not (Test-Path -LiteralPath $appIcon)) {
     $overlayBuildInfo `
     (Join-Path $projectRoot 'pc-overlay\LightDarkroomOverlay.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Overlay compilation failed.' }
+Copy-Item -LiteralPath $overlayConfigSource -Destination $overlayConfig -Force
 
 & $csc /nologo /target:winexe /optimize+ /platform:anycpu `
     /out:$updaterExe `
     /reference:System.dll `
     /reference:System.Core.dll `
     /reference:System.Security.dll `
+    /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
     $updaterBuildInfo `
     (Join-Path $projectRoot 'updater\JvdpAutoUpdater.cs')
@@ -123,6 +131,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
     /reference:System.Core.dll `
     /reference:System.Windows.Forms.dll `
     ("/resource:{0},JvdpLightDarkroomOverlay.exe" -f $overlayExe) `
+    ("/resource:{0},JvdpLightDarkroomOverlay.exe.config" -f $overlayConfig) `
     ("/resource:{0},JvdpAutoUpdater.exe" -f $updaterExe) `
     $installerBuildInfo `
     (Join-Path $projectRoot 'installer\InstallerProgram.cs') `

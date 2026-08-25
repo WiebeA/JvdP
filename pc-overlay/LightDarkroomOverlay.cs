@@ -234,7 +234,39 @@ namespace Jvdp.LightDarkroomOverlay
             AccessibleDescription = light >= 0 && iso > 0
                 ? "Lichtwaarde " + light + " wordt ISO " + iso + "."
                 : "Er is nog geen geldige lichtmeting.";
+            UpdateReadableMinimumSize();
             Invalidate();
+        }
+
+        private void UpdateReadableMinimumSize()
+        {
+            if (bands.Count == 0)
+                return;
+            int widest = 0;
+            int lower = 0;
+            using (Font readable = new Font(
+                "Segoe UI", OverlayForm.MinimumReadableUiFontSize,
+                FontStyle.Bold))
+            {
+                foreach (IsoBand band in bands)
+                {
+                    widest = Math.Max(widest, TextRenderer.MeasureText(
+                        lower + "–" + band.MaximumLight, readable,
+                        Size.Empty, TextFormatFlags.NoPadding |
+                        TextFormatFlags.SingleLine).Width);
+                    widest = Math.Max(widest, TextRenderer.MeasureText(
+                        "ISO " + band.Iso, readable,
+                        Size.Empty, TextFormatFlags.NoPadding |
+                        TextFormatFlags.SingleLine).Width);
+                    lower = band.MaximumLight + 1;
+                }
+            }
+            int inset = (int)Math.Ceiling(
+                16 * Math.Max(1f, DeviceDpi / 96f));
+            MinimumSize = new Size(
+                Math.Max(MinimumSize.Width,
+                    bands.Count * (widest + inset) + 2),
+                MinimumSize.Height);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -255,10 +287,12 @@ namespace Jvdp.LightDarkroomOverlay
             int lower = 0;
             int activeIndex = -1;
             float paintScale = GetPaintScale();
-            using (Font rangeFont = new Font(
-                "Segoe UI", 9.5f * visualScale, FontStyle.Bold))
-            using (Font isoFont = new Font(
-                "Segoe UI", 9f * visualScale, FontStyle.Regular))
+            int textWidth = Math.Max(1,
+                cellWidth - (int)Math.Round(8 * paintScale));
+            using (Font rangeFont = CreateReadablePaintFont(
+                9.5f * visualScale, FontStyle.Bold, textWidth, false))
+            using (Font isoFont = CreateReadablePaintFont(
+                9f * visualScale, FontStyle.Regular, textWidth, true))
             {
                 for (int index = 0; index < bands.Count; index++)
                 {
@@ -361,6 +395,41 @@ namespace Jvdp.LightDarkroomOverlay
             }
         }
 
+        private Font CreateReadablePaintFont(
+            float preferredSize, FontStyle style,
+            int availableWidth, bool isoText)
+        {
+            float minimum = Math.Min(
+                preferredSize, OverlayForm.MinimumReadableUiFontSize);
+            for (float size = preferredSize;
+                size >= minimum; size -= 0.5f)
+            {
+                Font candidate = new Font("Segoe UI", size, style);
+                bool fits = true;
+                int lower = 0;
+                foreach (IsoBand band in bands)
+                {
+                    string value = isoText
+                        ? "ISO " + band.Iso
+                        : lower + "–" + band.MaximumLight;
+                    int width = TextRenderer.MeasureText(
+                        value, candidate, Size.Empty,
+                        TextFormatFlags.NoPadding |
+                        TextFormatFlags.SingleLine).Width;
+                    if (width > availableWidth)
+                    {
+                        fits = false;
+                        break;
+                    }
+                    lower = band.MaximumLight + 1;
+                }
+                if (fits)
+                    return candidate;
+                candidate.Dispose();
+            }
+            return new Font("Segoe UI", minimum, style);
+        }
+
         private float GetPaintScale()
         {
             return visualScale * Math.Max(1f, DeviceDpi / 96f);
@@ -369,6 +438,7 @@ namespace Jvdp.LightDarkroomOverlay
 
     internal sealed class OverlayForm : Form
     {
+        internal const float MinimumReadableUiFontSize = 8.5f;
         private const int HotkeyTogglePause = 1;
         private const int HotkeyEmergencyPause = 2;
         private const uint ModAlt = 0x0001;
@@ -411,6 +481,7 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly Label modeLabel;
         private readonly Button statusButton;
         private readonly Panel statusPanel;
+        private readonly TableLayoutPanel statusPanelLayout;
         private readonly Label statusPanelTitle;
         private readonly Label statusPanelMessage;
         private readonly Button statusPanelToggleButton;
@@ -437,12 +508,15 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly Button pauseButton;
         private readonly Button detailsToggleButton;
         private readonly Panel detailsPanel;
+        private readonly TableLayoutPanel detailsLayout;
+        private readonly Panel progressBack;
         private readonly LightRangeControl rangeControl;
         private readonly TableLayoutPanel metrics;
         private readonly FlowLayoutPanel dashboard;
         private readonly Panel mappingPanel;
         private readonly Label mappingTitleLabel;
         private readonly Panel profilePanel;
+        private readonly Label profileCaptionLabel;
         private readonly Panel detailsHeader;
         private readonly TableLayoutPanel actionPanel;
         private readonly Panel mainHeaderPanel;
@@ -498,6 +572,7 @@ namespace Jvdp.LightDarkroomOverlay
         private IntPtr guardedManualControlHandle = IntPtr.Zero;
         private int coverRaiseActive;
         private readonly bool startInTray;
+        private readonly bool layoutTestMode;
         private bool exitRequested;
         private volatile bool shuttingDown;
         private readonly object mappingSync = new object();
@@ -533,7 +608,14 @@ namespace Jvdp.LightDarkroomOverlay
         };
 
         public OverlayForm(bool startMinimizedToTray)
+            : this(startMinimizedToTray, false)
         {
+        }
+
+        internal OverlayForm(
+            bool startMinimizedToTray, bool enableLayoutTestMode)
+        {
+            layoutTestMode = enableLayoutTestMode;
             Text = "JvdP Lichtregeling";
             Icon applicationIcon = Icon.ExtractAssociatedIcon(
                 Application.ExecutablePath);
@@ -596,7 +678,9 @@ namespace Jvdp.LightDarkroomOverlay
                 Math.Max(area.Top,
                     Math.Min(initialLocation.Y, area.Bottom - Height)));
             Location = initialLocation;
-            WindowState = FormWindowState.Maximized;
+            WindowState = layoutTestMode
+                ? FormWindowState.Normal
+                : FormWindowState.Maximized;
 
             mainHeaderPanel = new Panel();
             mainHeaderPanel.BackColor = Color.White;
@@ -808,11 +892,11 @@ namespace Jvdp.LightDarkroomOverlay
             profilePanel = MakeLightSurface(sectionWidth, 62);
             profilePanel.Margin = new Padding(0, 0, 0, 10);
             dashboard.Controls.Add(profilePanel);
-            Label profileCaption = MakeLabel(
+            profileCaptionLabel = MakeLabel(
                 "Actief profiel", 9, FontStyle.Regular,
                 Color.FromArgb(99, 108, 118));
-            profileCaption.SetBounds(18, 7, 180, 22);
-            profilePanel.Controls.Add(profileCaption);
+            profileCaptionLabel.SetBounds(18, 7, 180, 22);
+            profilePanel.Controls.Add(profileCaptionLabel);
             profileNameLabel = MakeLabel(
                 "Standaard · alle booths", 11, FontStyle.Bold,
                 Color.FromArgb(31, 35, 40));
@@ -846,49 +930,79 @@ namespace Jvdp.LightDarkroomOverlay
             detailsSummaryLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             detailsHeader.Controls.Add(detailsSummaryLabel);
 
-            detailsPanel = MakeLightSurface(sectionWidth, 148);
+            detailsPanel = MakeLightSurface(sectionWidth, 196);
             detailsPanel.Margin = new Padding(0, 0, 0, 8);
             detailsPanel.Visible = false;
             dashboard.Controls.Add(detailsPanel);
 
-            AddLightDetailCaption(detailsPanel, "Lichtsensor", 18, 10);
+            detailsLayout = new TableLayoutPanel();
+            detailsLayout.AutoSize = true;
+            detailsLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            detailsLayout.Dock = DockStyle.Top;
+            detailsLayout.Padding = new Padding(18, 10, 18, 10);
+            detailsLayout.ColumnCount = 2;
+            detailsLayout.RowCount = 6;
+            detailsLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.AutoSize));
+            detailsLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            for (int detailRow = 0; detailRow < 5; detailRow++)
+                detailsLayout.RowStyles.Add(
+                    new RowStyle(SizeType.AutoSize));
+            detailsLayout.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, 20));
+            detailsPanel.Controls.Add(detailsLayout);
+
+            Label sensorCaption = MakeLightDetailCaption("Lichtsensor");
+            detailsLayout.Controls.Add(sensorCaption, 0, 0);
             serialLabel = MakeLabel(
                 "Sensor zoeken", 10, FontStyle.Bold,
                 Color.FromArgb(137, 87, 0));
-            serialLabel.SetBounds(160, 10, detailsPanel.Width / 2 - 178, 28);
-            detailsPanel.Controls.Add(serialLabel);
-            AddLightDetailCaption(detailsPanel, "Darkroom", 18, 42);
+            ConfigureDetailValueLabel(serialLabel);
+            detailsLayout.Controls.Add(serialLabel, 1, 0);
+
+            Label darkroomCaption = MakeLightDetailCaption("Darkroom");
+            detailsLayout.Controls.Add(darkroomCaption, 0, 1);
             darkroomLabel = MakeLabel(
                 "Niet actief", 10, FontStyle.Bold,
                 Color.FromArgb(186, 36, 36));
-            darkroomLabel.SetBounds(160, 42, detailsPanel.Width / 2 - 178, 28);
-            detailsPanel.Controls.Add(darkroomLabel);
+            ConfigureDetailValueLabel(darkroomLabel);
+            detailsLayout.Controls.Add(darkroomLabel, 1, 1);
 
-            int rightDetail = detailsPanel.Width / 2 + 10;
-            AddLightDetailCaption(detailsPanel, "Automatisch aanpassen",
-                rightDetail, 10);
+            Label automaticCaption = MakeLightDetailCaption(
+                "Automatisch aanpassen");
+            detailsLayout.Controls.Add(automaticCaption, 0, 2);
             boothLabel = MakeLabel(
                 "Niet actief", 10, FontStyle.Bold,
                 Color.FromArgb(186, 36, 36));
-            boothLabel.SetBounds(rightDetail + 175, 10,
-                detailsPanel.Width - rightDetail - 193, 28);
-            boothLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            detailsPanel.Controls.Add(boothLabel);
-            AddLightDetailCaption(detailsPanel, "ISO in Darkroom",
-                rightDetail, 42);
+            ConfigureDetailValueLabel(boothLabel);
+            detailsLayout.Controls.Add(boothLabel, 1, 2);
+
+            Label currentIsoCaption = MakeLightDetailCaption(
+                "ISO in Darkroom");
+            detailsLayout.Controls.Add(currentIsoCaption, 0, 3);
             currentIsoLabel = MakeLabel(
                 "Onbekend", 10, FontStyle.Bold,
                 Color.FromArgb(99, 108, 118));
-            currentIsoLabel.SetBounds(rightDetail + 175, 42,
-                detailsPanel.Width - rightDetail - 193, 28);
-            currentIsoLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            detailsPanel.Controls.Add(currentIsoLabel);
+            ConfigureDetailValueLabel(currentIsoLabel);
+            detailsLayout.Controls.Add(currentIsoLabel, 1, 3);
 
             Label stabilityCaption = MakeLabel(
                 "Wachttijd vóór aanpassen", 9, FontStyle.Regular,
                 Color.FromArgb(99, 108, 118));
-            stabilityCaption.SetBounds(18, 82, 170, 28);
-            detailsPanel.Controls.Add(stabilityCaption);
+            stabilityCaption.AutoSize = true;
+            stabilityCaption.AutoEllipsis = false;
+            stabilityCaption.Dock = DockStyle.Fill;
+            stabilityCaption.Margin = new Padding(0, 6, 20, 6);
+            detailsLayout.Controls.Add(stabilityCaption, 0, 4);
+
+            FlowLayoutPanel stabilityFlow = new FlowLayoutPanel();
+            stabilityFlow.AutoSize = true;
+            stabilityFlow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            stabilityFlow.Dock = DockStyle.Fill;
+            stabilityFlow.FlowDirection = FlowDirection.LeftToRight;
+            stabilityFlow.WrapContents = true;
+            stabilityFlow.Margin = Padding.Empty;
             stabilitySecondsInput = new NumericUpDown();
             stabilitySecondsInput.Minimum = 5;
             stabilitySecondsInput.Maximum = 300;
@@ -899,7 +1013,10 @@ namespace Jvdp.LightDarkroomOverlay
             stabilitySecondsInput.BackColor = Color.White;
             stabilitySecondsInput.BorderStyle = BorderStyle.FixedSingle;
             stabilitySecondsInput.TextAlign = HorizontalAlignment.Center;
-            stabilitySecondsInput.SetBounds(190, 82, 72, 28);
+            stabilitySecondsInput.AutoSize = true;
+            stabilitySecondsInput.MinimumSize = new Size(72, 0);
+            stabilitySecondsInput.Height = stabilitySecondsInput.PreferredHeight;
+            stabilitySecondsInput.Margin = new Padding(0, 2, 14, 4);
             stabilitySecondsInput.AccessibleName =
                 "Wachttijd voor automatisch aanpassen in seconden";
             stabilitySecondsInput.ValueChanged += delegate
@@ -908,21 +1025,27 @@ namespace Jvdp.LightDarkroomOverlay
                 SaveStabilitySeconds();
                 RefreshUi();
             };
-            detailsPanel.Controls.Add(stabilitySecondsInput);
+            stabilityFlow.Controls.Add(stabilitySecondsInput);
             countdownLabel = MakeLabel(
                 "0,0 / 30,0 sec", 9, FontStyle.Regular,
                 Color.FromArgb(99, 108, 118));
-            countdownLabel.SetBounds(276, 82, 130, 28);
-            detailsPanel.Controls.Add(countdownLabel);
-            Panel progressBack = new Panel();
+            countdownLabel.AutoSize = true;
+            countdownLabel.AutoEllipsis = false;
+            countdownLabel.Margin = new Padding(0, 7, 0, 4);
+            stabilityFlow.Controls.Add(countdownLabel);
+            detailsLayout.Controls.Add(stabilityFlow, 1, 4);
+
+            progressBack = new Panel();
             progressBack.BackColor = Color.FromArgb(218, 222, 229);
-            progressBack.SetBounds(18, 121, detailsPanel.Width - 36, 6);
-            progressBack.Anchor = AnchorStyles.Top | AnchorStyles.Left |
-                AnchorStyles.Right;
-            detailsPanel.Controls.Add(progressBack);
+            progressBack.Dock = DockStyle.Fill;
+            progressBack.MinimumSize = new Size(1, 6);
+            progressBack.Margin = new Padding(0, 7, 0, 7);
+            detailsLayout.Controls.Add(progressBack, 0, 5);
+            detailsLayout.SetColumnSpan(progressBack, 2);
             progressFill = new Panel();
             progressFill.BackColor = Color.FromArgb(31, 111, 235);
-            progressFill.SetBounds(0, 0, 0, 6);
+            progressFill.Dock = DockStyle.Left;
+            progressFill.Width = 0;
             progressBack.Controls.Add(progressFill);
 
             detailsToggleButton.Click += delegate
@@ -978,45 +1101,92 @@ namespace Jvdp.LightDarkroomOverlay
 
             statusPanel = MakeLightSurface(500, 270);
             statusPanel.Visible = false;
-            statusPanel.Padding = new Padding(22);
+            statusPanel.AutoScroll = true;
+            statusPanel.Padding = Padding.Empty;
+            statusPanel.AccessibleName = "Statuspaneel";
             Controls.Add(statusPanel);
+
+            statusPanelLayout = new TableLayoutPanel();
+            statusPanelLayout.AutoSize = true;
+            statusPanelLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            statusPanelLayout.Dock = DockStyle.Top;
+            statusPanelLayout.Padding = new Padding(22, 14, 22, 20);
+            statusPanelLayout.ColumnCount = 1;
+            statusPanelLayout.RowCount = 3;
+            statusPanelLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            statusPanelLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            statusPanelLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            statusPanelLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            statusPanel.Controls.Add(statusPanelLayout);
+
+            TableLayoutPanel statusHeader = new TableLayoutPanel();
+            statusHeader.AutoSize = true;
+            statusHeader.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            statusHeader.Dock = DockStyle.Fill;
+            statusHeader.ColumnCount = 2;
+            statusHeader.RowCount = 1;
+            statusHeader.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            statusHeader.ColumnStyles.Add(
+                new ColumnStyle(SizeType.AutoSize));
+            statusHeader.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            statusHeader.Margin = new Padding(0, 0, 0, 8);
 
             statusPanelTitle = MakeLabel(
                 "Systeemstatus", 17, FontStyle.Bold,
                 Color.FromArgb(31, 35, 40));
-            statusPanelTitle.SetBounds(22, 14, 390, 42);
-            statusPanel.Controls.Add(statusPanelTitle);
+            statusPanelTitle.AutoSize = true;
+            statusPanelTitle.AutoEllipsis = false;
+            statusPanelTitle.Dock = DockStyle.Fill;
+            statusPanelTitle.Margin = new Padding(0, 4, 12, 0);
+            statusHeader.Controls.Add(statusPanelTitle, 0, 0);
 
             Button closeStatusButton = MakeLightButton("×", false);
             closeStatusButton.Font = new Font("Segoe UI", 16, FontStyle.Regular);
             closeStatusButton.AccessibleName = "Status sluiten";
-            closeStatusButton.SetBounds(statusPanel.Width - 58, 12, 42, 42);
-            closeStatusButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            closeStatusButton.AutoSize = true;
+            closeStatusButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            closeStatusButton.MinimumSize = new Size(42, 42);
+            closeStatusButton.Padding = Padding.Empty;
+            closeStatusButton.Margin = Padding.Empty;
             closeStatusButton.Click += delegate { statusPanel.Visible = false; };
-            statusPanel.Controls.Add(closeStatusButton);
+            statusHeader.Controls.Add(closeStatusButton, 1, 0);
+            statusPanelLayout.Controls.Add(statusHeader, 0, 0);
 
             statusPanelMessage = MakeLabel(
                 "", 10, FontStyle.Regular, Color.FromArgb(71, 78, 88));
-            statusPanelMessage.SetBounds(22, 64,
-                statusPanel.Width - 44, 112);
-            statusPanelMessage.Anchor = AnchorStyles.Top |
-                AnchorStyles.Left | AnchorStyles.Right;
-            statusPanel.Controls.Add(statusPanelMessage);
+            statusPanelMessage.AutoSize = true;
+            statusPanelMessage.AutoEllipsis = false;
+            statusPanelMessage.Dock = DockStyle.Fill;
+            statusPanelMessage.MaximumSize = new Size(456, 0);
+            statusPanelMessage.Margin = new Padding(0, 0, 0, 18);
+            statusPanelLayout.Controls.Add(statusPanelMessage, 0, 1);
 
             statusPanelToggleButton = MakeLightButton(
                 "Automatisch aanpassen stoppen", false);
-            statusPanelToggleButton.SetBounds(22, 196,
-                statusPanel.Width - 44, 50);
-            statusPanelToggleButton.Anchor = AnchorStyles.Bottom |
-                AnchorStyles.Left | AnchorStyles.Right;
+            statusPanelToggleButton.AutoSize = true;
+            statusPanelToggleButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            statusPanelToggleButton.Dock = DockStyle.Fill;
+            statusPanelToggleButton.MinimumSize = new Size(1, 50);
+            statusPanelToggleButton.Padding = new Padding(16, 0, 16, 0);
+            statusPanelToggleButton.Margin = Padding.Empty;
             statusPanelToggleButton.Click += delegate { TogglePause(); };
-            statusPanel.Controls.Add(statusPanelToggleButton);
+            statusPanelLayout.Controls.Add(statusPanelToggleButton, 0, 2);
+            statusPanelMessage.TextChanged += delegate
+            {
+                PositionStatusPanel();
+            };
+            statusPanelToggleButton.TextChanged += delegate
+            {
+                PositionStatusPanel();
+            };
             PositionStatusPanel();
 
             trayIcon = new NotifyIcon();
             trayIcon.Icon = Icon;
             trayIcon.Text = "JvdP Lichtregeling";
-            trayIcon.Visible = true;
+            trayIcon.Visible = !layoutTestMode;
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Font = new Font("Segoe UI", 10, FontStyle.Regular);
             trayStatusMenuItem = new ToolStripMenuItem("Bezig met verbinden");
@@ -1046,7 +1216,8 @@ namespace Jvdp.LightDarkroomOverlay
             uiTimer = new System.Windows.Forms.Timer();
             uiTimer.Interval = 500;
             uiTimer.Tick += delegate { RefreshUi(); };
-            uiTimer.Start();
+            if (!layoutTestMode)
+                uiTimer.Start();
 
             coverWinEventDelegate = CoverWinEvent;
             coverGuardTimer = new System.Windows.Forms.Timer();
@@ -1061,6 +1232,8 @@ namespace Jvdp.LightDarkroomOverlay
 
             Shown += delegate
             {
+                if (layoutTestMode)
+                    return;
                 RegisterHotKey(Handle, HotkeyTogglePause, ModControl | ModAlt, (uint)Keys.F9);
                 RegisterHotKey(Handle, HotkeyEmergencyPause, ModControl | ModAlt, (uint)Keys.F12);
                 StartBackgroundMonitors();
@@ -1074,6 +1247,14 @@ namespace Jvdp.LightDarkroomOverlay
 
             FormClosing += delegate(object sender, FormClosingEventArgs args)
             {
+                if (layoutTestMode)
+                {
+                    uiTimer.Stop();
+                    shuttingDown = true;
+                    trayIcon.Visible = false;
+                    trayIcon.Dispose();
+                    return;
+                }
                 Log("Window close requested; reason=" +
                     args.CloseReason + "; exitRequested=" +
                     exitRequested + ".");
@@ -1097,6 +1278,28 @@ namespace Jvdp.LightDarkroomOverlay
                 trayIcon.Dispose();
                 Log("Overlay stopped.");
             };
+        }
+
+        protected override bool ShowWithoutActivation
+        {
+            get { return layoutTestMode || base.ShowWithoutActivation; }
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams parameters = base.CreateParams;
+                if (layoutTestMode)
+                {
+                    const int WsExTransparent = 0x00000020;
+                    const int WsExToolWindow = 0x00000080;
+                    const int WsExNoActivate = 0x08000000;
+                    parameters.ExStyle |= WsExTransparent |
+                        WsExToolWindow | WsExNoActivate;
+                }
+                return parameters;
+            }
         }
 
         private void CaptureResponsiveFonts(Control root)
@@ -1189,11 +1392,14 @@ namespace Jvdp.LightDarkroomOverlay
                 control.ClientSize.Height - control.Padding.Vertical -
                 verticalInset);
             float targetSize = control.Font.Size;
+            float minimumReadableSize = Math.Min(
+                targetSize, MinimumReadableUiFontSize);
             FontStyle style = control.Font.Style;
             string family = control.Font.FontFamily.Name;
             bool isButton = control is Button;
 
-            for (float size = targetSize; size >= 5f; size -= 0.5f)
+            for (float size = targetSize;
+                size >= minimumReadableSize; size -= 0.5f)
             {
                 using (Font candidate = new Font(family, size, style))
                 {
@@ -1226,9 +1432,9 @@ namespace Jvdp.LightDarkroomOverlay
                 }
             }
 
-            if (control.Font.Size > 5f)
+            if (control.Font.Size > minimumReadableSize)
                 ReplaceControlFont(control,
-                    new Font(family, 5f, style));
+                    new Font(family, minimumReadableSize, style));
             return ExpandControlForFullText(
                 control, horizontalInset, verticalInset);
         }
@@ -1439,8 +1645,7 @@ namespace Jvdp.LightDarkroomOverlay
                     responsiveDashboardBounds)
                 {
                     Control control = item.Key;
-                    if (control == null || control.IsDisposed ||
-                        control.Dock != DockStyle.None)
+                    if (control == null || control.IsDisposed)
                         continue;
                     Rectangle basis = item.Value;
                     if (control.Parent == dashboard)
@@ -1459,6 +1664,10 @@ namespace Jvdp.LightDarkroomOverlay
                                     margin.Bottom * layoutScale));
                         continue;
                     }
+                    if (control.Dock != DockStyle.None ||
+                        control.Parent is TableLayoutPanel ||
+                        control.Parent is FlowLayoutPanel)
+                        continue;
                     control.Top = (int)Math.Round(
                         basis.Top * layoutScale);
                     control.Height = (int)Math.Round(
@@ -1632,12 +1841,17 @@ namespace Jvdp.LightDarkroomOverlay
 
             Size mappingTitleSize = MeasureSafeText(mappingTitleLabel);
             Size measuredSize = MeasureSafeText(lastMeasuredLabel);
+            Size profileCaptionSize = MeasureSafeText(profileCaptionLabel);
             Size profileNameSize = MeasureSafeText(profileNameLabel);
             Size profileButtonSize = MeasureSafeButton(
                 mappingSettingsButton,
                 (int)Math.Ceiling(154 * layoutScale),
                 (int)Math.Ceiling(42 * layoutScale));
             Size detailsButtonText = MeasureSafeText(detailsToggleButton);
+            Size detailsButtonSize = MeasureSafeButton(
+                detailsToggleButton,
+                (int)Math.Ceiling(280 * layoutScale),
+                (int)Math.Ceiling(42 * layoutScale));
             Size detailsSummarySize = MeasureSafeText(detailsSummaryLabel);
 
             int mappingTitleWidth = Math.Max(
@@ -1682,19 +1896,66 @@ namespace Jvdp.LightDarkroomOverlay
             rangeControl.Width = Math.Max(1, sectionWidth - side * 2);
             metrics.Left = side;
             metrics.Width = Math.Max(1, sectionWidth - side * 2);
+            mappingPanel.Height = Math.Max(
+                (int)Math.Ceiling(264 * layoutScale),
+                metrics.Bottom + side + 2);
 
             mappingSettingsButton.SetBounds(
                 sectionWidth - smallSide - profileButtonSize.Width,
-                mappingSettingsButton.Top,
+                smallSide,
                 profileButtonSize.Width,
                 profileButtonSize.Height);
+            profileCaptionLabel.SetBounds(
+                smallSide, smallSide,
+                Math.Max(1, mappingSettingsButton.Left - gap - smallSide),
+                Math.Max(profileCaptionSize.Height,
+                    (int)Math.Ceiling(20 * layoutScale)));
+            profileNameLabel.Left = smallSide;
+            profileNameLabel.Top = profileCaptionLabel.Bottom +
+                Math.Max(1, (int)Math.Ceiling(2 * layoutScale));
             profileNameLabel.Width = Math.Max(1,
                 mappingSettingsButton.Left - gap - profileNameLabel.Left);
+            profileNameLabel.Height = Math.Max(
+                profileNameSize.Height,
+                (int)Math.Ceiling(26 * layoutScale));
+            profilePanel.Height = Math.Max(
+                profileNameLabel.Bottom + smallSide + 2,
+                mappingSettingsButton.Bottom + smallSide + 2);
 
-            detailsToggleButton.Width = detailsButtonWidth;
+            detailsToggleButton.SetBounds(
+                Math.Max(1, (int)Math.Ceiling(10 * layoutScale)),
+                Math.Max(1, (int)Math.Ceiling(5 * layoutScale)),
+                detailsButtonWidth, detailsButtonSize.Height);
             detailsSummaryLabel.Left =
                 sectionWidth - smallSide - detailsSummaryWidth;
             detailsSummaryLabel.Width = detailsSummaryWidth;
+            detailsSummaryLabel.Top = detailsToggleButton.Top;
+            detailsSummaryLabel.Height = Math.Max(
+                detailsButtonSize.Height, detailsSummarySize.Height);
+            detailsHeader.Height = Math.Max(
+                detailsToggleButton.Bottom,
+                detailsSummaryLabel.Bottom) +
+                Math.Max(1, (int)Math.Ceiling(5 * layoutScale)) + 2;
+
+            if (detailsLayout != null)
+            {
+                detailsLayout.Width = Math.Max(1, sectionWidth - 2);
+                int detailValueWidth = Math.Max(
+                    (int)Math.Ceiling(260 * layoutScale),
+                    sectionWidth - (int)Math.Ceiling(260 * layoutScale));
+                serialLabel.MaximumSize = new Size(detailValueWidth, 0);
+                darkroomLabel.MaximumSize = new Size(detailValueWidth, 0);
+                boothLabel.MaximumSize = new Size(detailValueWidth, 0);
+                currentIsoLabel.MaximumSize = new Size(detailValueWidth, 0);
+                detailsLayout.PerformLayout();
+                int detailsContentHeight = Math.Max(
+                    detailsLayout.Height,
+                    detailsLayout.GetPreferredSize(
+                        new Size(detailsLayout.Width, 0)).Height);
+                detailsPanel.Height = Math.Max(
+                    (int)Math.Ceiling(160 * layoutScale),
+                    detailsContentHeight + 6);
+            }
         }
 
         private static Size MeasureSafeText(Control control)
@@ -1736,6 +1997,13 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void ShowMainWindow()
         {
+            if (layoutTestMode)
+            {
+                ShowInTaskbar = false;
+                if (!Visible)
+                    Show();
+                return;
+            }
             ShowInTaskbar = true;
             Show();
             if (WindowState == FormWindowState.Minimized)
@@ -1757,7 +2025,7 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void PositionStatusPanel()
         {
-            if (statusPanel == null)
+            if (statusPanel == null || statusPanelLayout == null)
                 return;
             int contentTop = mainHeaderPanel == null
                 ? ScaleLogical(64) : mainHeaderPanel.Bottom;
@@ -1765,13 +2033,28 @@ namespace Jvdp.LightDarkroomOverlay
                 ScaleLogical(500),
                 Math.Max(ScaleLogical(420),
                     ClientSize.Width - ScaleLogical(48)));
-            int height = ScaleLogical(270);
+            int textWidth = Math.Max(1,
+                width - ScaleLogical(46));
+            statusPanelMessage.MaximumSize = new Size(textWidth, 0);
+            statusPanelLayout.Width = Math.Max(1, width - 2);
+            statusPanelLayout.PerformLayout();
+            int desiredHeight = Math.Max(ScaleLogical(230),
+                statusPanelLayout.PreferredSize.Height + 2);
+            int availableHeight = Math.Max(ScaleLogical(200),
+                ClientSize.Height - contentTop - ScaleLogical(36));
+            int height = Math.Min(desiredHeight, availableHeight);
+            statusPanel.AutoScrollMinSize = new Size(
+                0, statusPanelLayout.PreferredSize.Height);
             statusPanel.SetBounds(
                 Math.Max(ScaleLogical(12),
                     (ClientSize.Width - width) / 2),
                 contentTop + Math.Max(ScaleLogical(18),
                     (ClientSize.Height - contentTop - height) / 2),
                 width, height);
+            statusPanelLayout.Width = Math.Max(1,
+                statusPanel.ClientSize.Width -
+                (statusPanel.VerticalScroll.Visible
+                    ? SystemInformation.VerticalScrollBarWidth : 0));
         }
 
         private void ExitApplication()
@@ -2097,9 +2380,11 @@ namespace Jvdp.LightDarkroomOverlay
         private static List<IsoBand> CreateDefaultIsoBands()
         {
             return new List<IsoBand> {
-                new IsoBand(25, 3200),
+                new IsoBand(16, 3200),
+                new IsoBand(33, 2500),
                 new IsoBand(50, 1600),
-                new IsoBand(75, 800),
+                new IsoBand(67, 1000),
+                new IsoBand(84, 640),
                 new IsoBand(100, 400)
             };
         }
@@ -2394,6 +2679,81 @@ namespace Jvdp.LightDarkroomOverlay
             }
         }
 
+        internal void PrepareDashboardForLayoutTest(bool showDetails)
+        {
+            if (!layoutTestMode)
+                throw new InvalidOperationException(
+                    "Layout test hooks are only available in layout test mode.");
+            serialLabel.Text =
+                "COM123 verbonden · JVDP lichtdata wordt stabiel ontvangen";
+            darkroomLabel.Text =
+                "Darkroombooth actief · camera-instellingen beschikbaar";
+            boothLabel.Text =
+                "Automatisch aanpassen staat gestart en blijft actief";
+            currentIsoLabel.Text = "ISO 2500 bevestigd in Darkroom";
+            detailsSummaryLabel.Text =
+                "Sensor verbonden · Darkroom actief · automatisch gestart";
+            lastMeasuredLabel.Text =
+                "Laatste lichtmeting 63 · doelwaarde ISO 1000";
+            actionLabel.Text =
+                "De lichtwaarde is stabiel; de doel-ISO kan veilig worden toegepast.";
+            detailsPanel.Visible = showDetails;
+            detailsToggleButton.Text = showDetails
+                ? "Technische details verbergen"
+                : "Verbindingen en technische details";
+            LayoutDashboardWidths();
+            ApplyResponsiveTypography();
+        }
+
+        internal void ShowStatusForLayoutTest()
+        {
+            if (!layoutTestMode)
+                throw new InvalidOperationException(
+                    "Layout test hooks are only available in layout test mode.");
+            statusButton.Text = "Actie nodig · controleer de verbinding";
+            statusPanelTitle.Text = "Systeemstatus en bediening";
+            statusPanelMessage.Text =
+                "De lichtsensor ontvangt gegevens, maar Darkroom heeft de " +
+                "camera-instellingen nog niet beschikbaar gemaakt. Controleer " +
+                "of Darkroombooth actief is. Automatisch aanpassen blijft " +
+                "gestopt totdat je het hier weer start.";
+            statusPanelToggleButton.Text = "Automatisch aanpassen starten";
+            statusPanel.Visible = true;
+            PositionStatusPanel();
+            statusPanel.BringToFront();
+        }
+
+        internal bool StatusPanelVisibleForLayoutTest
+        {
+            get
+            {
+                return layoutTestMode && statusPanel.Visible &&
+                    statusPanel.Bounds.Width > 0 &&
+                    statusPanel.Bounds.Height > 0;
+            }
+        }
+
+        internal void ShowSettingsForLayoutTest(bool showCoverSettings)
+        {
+            if (!layoutTestMode)
+                throw new InvalidOperationException(
+                    "Layout test hooks are only available in layout test mode.");
+            ShowIsoMappingSettings();
+            if (settingsPage != null)
+                settingsPage.ShowSectionForLayoutTest(
+                    showCoverSettings, showCoverSettings);
+            LayoutMainChrome();
+        }
+
+        internal bool VerifyStaleUpdateRecoveryForLayoutTest()
+        {
+            if (!layoutTestMode)
+                throw new InvalidOperationException(
+                    "Layout test hooks are only available in layout test mode.");
+            return settingsPage != null &&
+                settingsPage.VerifyStaleUpdateRecoveryForLayoutTest();
+        }
+
         private static string BuildVersionFooterText(string localRoot)
         {
             DateTime installedAt = File.GetLastWriteTime(
@@ -2473,13 +2833,25 @@ namespace Jvdp.LightDarkroomOverlay
             return button;
         }
 
-        private static void AddLightDetailCaption(
-            Panel panel, string text, int left, int top)
+        private static Label MakeLightDetailCaption(string text)
         {
             Label caption = MakeLabel(
                 text, 9, FontStyle.Regular, Color.FromArgb(99, 108, 118));
-            caption.SetBounds(left, top, 168, 28);
-            panel.Controls.Add(caption);
+            caption.AutoSize = true;
+            caption.AutoEllipsis = false;
+            caption.Dock = DockStyle.Fill;
+            caption.Margin = new Padding(0, 6, 24, 6);
+            return caption;
+        }
+
+        private static void ConfigureDetailValueLabel(Label label)
+        {
+            label.AutoSize = true;
+            label.AutoEllipsis = false;
+            label.Dock = DockStyle.Fill;
+            label.Margin = new Padding(0, 6, 0, 6);
+            label.MaximumSize = new Size(760, 0);
+            label.TextAlign = ContentAlignment.MiddleLeft;
         }
 
         private void AddConnectionRow(
@@ -5370,8 +5742,21 @@ namespace Jvdp.LightDarkroomOverlay
                         new Size(textWidth, 0);
                     coverPreviewMessage.MaximumSize =
                         new Size(textWidth, 0);
+                    coverRoot.PerformLayout();
+                    int requiredRootHeight = 1;
+                    foreach (Control section in coverRoot.Controls)
+                        requiredRootHeight = Math.Max(
+                            requiredRootHeight,
+                            section.Bottom + section.Margin.Bottom);
+                    if (coverRoot.MinimumSize.Height !=
+                        requiredRootHeight)
+                        coverRoot.MinimumSize = new Size(
+                            0, requiredRootHeight);
+                    if (coverRoot.Height < requiredRootHeight)
+                        coverRoot.Height = requiredRootHeight;
                     coverSettingsPanel.AutoScrollMinSize = new Size(
-                        0, Math.Max(1, coverRoot.PreferredSize.Height + 12));
+                        0, Math.Max(requiredRootHeight,
+                            coverRoot.PreferredSize.Height) + 12);
                 }
                 finally
                 {
@@ -5712,6 +6097,8 @@ namespace Jvdp.LightDarkroomOverlay
             }
             catch (Exception exception)
             {
+                updateStatusTimer.Stop();
+                updateCheckStartedAtUtc = DateTime.MinValue;
                 SetUpdateButtonState(
                     "Opnieuw proberen", Color.FromArgb(186, 36, 36),
                     true, exception.Message);
@@ -5720,16 +6107,9 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void RefreshUpdateStatus()
         {
-            if (updateCheckStartedAtUtc != DateTime.MinValue &&
-                DateTime.UtcNow - updateCheckStartedAtUtc >
-                    TimeSpan.FromMinutes(2))
-            {
-                updateStatusTimer.Stop();
-                SetUpdateButtonState(
-                    "Opnieuw proberen", Color.FromArgb(186, 36, 36),
-                    true, "De updatecontrole duurde te lang.");
+            DateTime nowUtc = DateTime.UtcNow;
+            if (ShowUpdateTimeoutIfNeeded(nowUtc))
                 return;
-            }
             if (!File.Exists(updaterStatusPath))
                 return;
 
@@ -5752,6 +6132,19 @@ namespace Jvdp.LightDarkroomOverlay
                 return;
             }
 
+            DateTime statusFileUtc = DateTime.MinValue;
+            try
+            {
+                statusFileUtc = File.GetLastWriteTimeUtc(updaterStatusPath);
+            }
+            catch { }
+            ApplyUpdateStatusValues(values, statusFileUtc, nowUtc);
+        }
+
+        private void ApplyUpdateStatusValues(
+            Dictionary<string, string> values,
+            DateTime statusFileUtc, DateTime nowUtc)
+        {
             string state;
             if (!values.TryGetValue("State", out state))
                 return;
@@ -5761,6 +6154,30 @@ namespace Jvdp.LightDarkroomOverlay
             string available;
             if (!values.TryGetValue("AvailableVersion", out available))
                 available = "";
+
+            bool transient =
+                String.Equals(state, "checking",
+                    StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(state, "downloading",
+                    StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(state, "installing",
+                    StringComparison.OrdinalIgnoreCase);
+            if (transient)
+            {
+                if (updateCheckStartedAtUtc == DateTime.MinValue)
+                {
+                    string checkedValue;
+                    values.TryGetValue("Checked", out checkedValue);
+                    updateCheckStartedAtUtc = ResolveUpdateStatusStartUtc(
+                        checkedValue, statusFileUtc, nowUtc);
+                }
+                if (ShowUpdateTimeoutIfNeeded(nowUtc))
+                    return;
+                // Settings can be opened after an updater process has already
+                // started. Keep polling that existing state as well; otherwise
+                // Downloaden/Installeren would remain disabled forever.
+                updateStatusTimer.Start();
+            }
 
             if (String.Equals(state, "checking",
                 StringComparison.OrdinalIgnoreCase))
@@ -5778,6 +6195,7 @@ namespace Jvdp.LightDarkroomOverlay
                 StringComparison.OrdinalIgnoreCase))
             {
                 updateStatusTimer.Stop();
+                updateCheckStartedAtUtc = DateTime.MinValue;
                 SetUpdateButtonState(
                     "Versie is actueel", Color.FromArgb(34, 132, 67),
                     true, message);
@@ -5786,6 +6204,7 @@ namespace Jvdp.LightDarkroomOverlay
                 StringComparison.OrdinalIgnoreCase))
             {
                 updateStatusTimer.Stop();
+                updateCheckStartedAtUtc = DateTime.MinValue;
                 SetUpdateButtonState(
                     "Versie " + available + " geïnstalleerd",
                     Color.FromArgb(34, 132, 67), true, message);
@@ -5794,10 +6213,66 @@ namespace Jvdp.LightDarkroomOverlay
                 StringComparison.OrdinalIgnoreCase))
             {
                 updateStatusTimer.Stop();
+                updateCheckStartedAtUtc = DateTime.MinValue;
                 SetUpdateButtonState(
                     "Opnieuw proberen", Color.FromArgb(186, 36, 36),
                     true, message);
             }
+        }
+
+        private bool ShowUpdateTimeoutIfNeeded(DateTime nowUtc)
+        {
+            if (updateCheckStartedAtUtc == DateTime.MinValue ||
+                nowUtc - updateCheckStartedAtUtc <= TimeSpan.FromMinutes(2))
+                return false;
+            updateStatusTimer.Stop();
+            updateCheckStartedAtUtc = DateTime.MinValue;
+            SetUpdateButtonState(
+                "Opnieuw proberen", Color.FromArgb(186, 36, 36),
+                true, "De updatecontrole duurde te lang.");
+            return true;
+        }
+
+        internal static DateTime ResolveUpdateStatusStartUtc(
+            string checkedValue, DateTime statusFileUtc, DateTime nowUtc)
+        {
+            DateTime parsed;
+            if (!String.IsNullOrWhiteSpace(checkedValue) &&
+                DateTime.TryParse(checkedValue, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out parsed))
+            {
+                parsed = parsed.ToUniversalTime();
+                if (parsed <= nowUtc.AddMinutes(1))
+                    return parsed;
+            }
+            if (statusFileUtc != DateTime.MinValue)
+            {
+                DateTime normalized = statusFileUtc.ToUniversalTime();
+                if (normalized <= nowUtc.AddMinutes(1))
+                    return normalized;
+            }
+            return nowUtc;
+        }
+
+        internal bool VerifyStaleUpdateRecoveryForLayoutTest()
+        {
+            DateTime nowUtc = DateTime.UtcNow;
+            DateTime staleUtc = nowUtc.AddMinutes(-3);
+            Dictionary<string, string> values =
+                new Dictionary<string, string>(
+                    StringComparer.OrdinalIgnoreCase);
+            values["State"] = "installing";
+            values["Checked"] = staleUtc.ToString("o");
+            values["AvailableVersion"] = "99.0.0";
+            values["Message"] = "Bestaande installatie wordt afgerond.";
+            updateCheckStartedAtUtc = DateTime.MinValue;
+            ApplyUpdateStatusValues(values, staleUtc, nowUtc);
+            bool recovered = updateButton.Enabled &&
+                String.Equals(updateButton.Text, "Opnieuw proberen",
+                    StringComparison.Ordinal) &&
+                !updateStatusTimer.Enabled;
+            updateCheckStartedAtUtc = DateTime.MinValue;
+            return recovered;
         }
 
         private void SetUpdateButtonState(
@@ -5869,6 +6344,33 @@ namespace Jvdp.LightDarkroomOverlay
             SetSectionButtonStyle(isoSettingsTab, !fullpage);
             SetSectionButtonStyle(coverSettingsTab, fullpage);
             saveButton.BringToFront();
+        }
+
+        internal void ShowSectionForLayoutTest(
+            bool fullpage, bool useMaximumText)
+        {
+            boothAndVersionLabel.Text =
+                "Updatecontrole voltooid · Booth: " +
+                "JVDP-SURFACE-BOOTH-MET-EEN-LANGE-NAAM" +
+                " · Versie " + BuildInfo.Version;
+            if (useMaximumText)
+            {
+                customCoverText.Checked = true;
+                coverTitleInput.Text = new string('W', 60);
+                coverMessageInput.Text =
+                    "Dit is een maximale testtekst voor de volledige " +
+                    "schermweergave. Alle woorden moeten leesbaar blijven, " +
+                    "automatisch afbreken en binnen hun eigen vlak staan. " +
+                    "Geen regel mag onder een knop, titel, invoerveld of " +
+                    "voorbeeld terechtkomen. Ook op een compact Surface-" +
+                    "scherm blijft deze volledige tekst bereikbaar en " +
+                    "duidelijk zichtbaar voor de gebruiker.";
+                if (coverMessageInput.Text.Length < 240)
+                    coverMessageInput.Text = coverMessageInput.Text.PadRight(
+                        240, '.');
+            }
+            ShowSettingsSection(fullpage);
+            EnsureTextFitsWithinBounds();
         }
 
         private static void SetSectionButtonStyle(Button button, bool active)
@@ -6174,21 +6676,26 @@ namespace Jvdp.LightDarkroomOverlay
         internal ManualCoverControlForm(
             Rectangle workingArea, EventHandler hideAction)
         {
-            Text = "Hide fullscreen cover";
-            Width = 300;
-            Height = 64;
+            Text = "Volledig scherm verbergen";
+            AutoScaleDimensions = new SizeF(96f, 96f);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Font = new Font("Segoe UI", 10, FontStyle.Regular);
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
-            Location = new Point(
-                workingArea.Right - Width - 24,
-                workingArea.Top + 24);
             BackColor = Color.FromArgb(13, 17, 23);
             TopMost = true;
-            ShowInTaskbar = false;
+            // Keep this as an unowned native top-level window. WinForms uses a
+            // hidden parking window as owner when ShowInTaskbar is false; on a
+            // mixed-DPI PC that gives the control the parking window's DPI.
+            // WS_EX_TOOLWINDOW below keeps it out of the taskbar instead.
+            ShowInTaskbar = true;
 
             Button hideButton = new Button();
-            hideButton.Text = "HIDE FULLSCREEN COVER";
+            hideButton.Text = "VOLLEDIG SCHERM VERBERGEN";
             hideButton.Dock = DockStyle.Fill;
+            hideButton.AutoSize = true;
+            hideButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            hideButton.Padding = new Padding(20, 10, 20, 10);
             hideButton.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             hideButton.ForeColor = Color.White;
             hideButton.BackColor = Color.FromArgb(187, 45, 59);
@@ -6196,6 +6703,29 @@ namespace Jvdp.LightDarkroomOverlay
             hideButton.FlatAppearance.BorderSize = 0;
             hideButton.Click += hideAction;
             Controls.Add(hideButton);
+            Size textSize = TextRenderer.MeasureText(
+                hideButton.Text, hideButton.Font, Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+            ClientSize = new Size(
+                Math.Max(300, textSize.Width + 48),
+                Math.Max(64, textSize.Height + 28));
+            MinimumSize = Size;
+            Location = new Point(
+                workingArea.Right - Width - 24,
+                workingArea.Top + 24);
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                const int WsExToolWindow = 0x00000080;
+                const int WsExAppWindow = 0x00040000;
+                CreateParams parameters = base.CreateParams;
+                parameters.ExStyle &= ~WsExAppWindow;
+                parameters.ExStyle |= WsExToolWindow;
+                return parameters;
+            }
         }
     }
     internal sealed class ActionCoverForm : Form
@@ -6215,7 +6745,9 @@ namespace Jvdp.LightDarkroomOverlay
             BackColor = Color.White;
             ForeColor = Color.FromArgb(31, 38, 58);
             TopMost = true;
-            ShowInTaskbar = false;
+            // Stay unowned so the window is created with the target monitor's
+            // DPI. WS_EX_TOOLWINDOW keeps it out of taskbar and Alt+Tab.
+            ShowInTaskbar = true;
             AllowTransparency = false;
             Opacity = 1.0;
             DoubleBuffered = true;
@@ -6231,8 +6763,10 @@ namespace Jvdp.LightDarkroomOverlay
             get
             {
                 const int WsExToolWindow = 0x00000080;
+                const int WsExAppWindow = 0x00040000;
                 const int WsExNoActivate = 0x08000000;
                 CreateParams parameters = base.CreateParams;
+                parameters.ExStyle &= ~WsExAppWindow;
                 parameters.ExStyle |= WsExToolWindow | WsExNoActivate;
                 return parameters;
             }
@@ -6246,25 +6780,10 @@ namespace Jvdp.LightDarkroomOverlay
             args.Graphics.TextRenderingHint =
                 System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
-            float horizontalMargin = Math.Max(
-                36f, ClientSize.Width * 0.07f);
-            float verticalMargin = Math.Max(
-                32f, ClientSize.Height * 0.07f);
-            float contentWidth = Math.Max(
-                1f, ClientSize.Width - horizontalMargin * 2f);
-            float contentHeight = Math.Max(
-                1f, ClientSize.Height - verticalMargin * 2f);
-            float gap = Math.Max(16f, contentHeight * 0.035f);
-            float titleHeight = Math.Max(
-                54f, (contentHeight - gap) * 0.34f);
-            float messageHeight = Math.Max(
-                54f, contentHeight - titleHeight - gap);
-            RectangleF titleArea = new RectangleF(
-                horizontalMargin, verticalMargin,
-                contentWidth, titleHeight);
-            RectangleF detailArea = new RectangleF(
-                horizontalMargin, verticalMargin + titleHeight + gap,
-                contentWidth, messageHeight);
+            RectangleF titleArea;
+            RectangleF detailArea;
+            CalculateTextAreas(
+                ClientSize, out titleArea, out detailArea);
 
             using (StringFormat centered = CreateCenteredTextFormat())
             using (Font titleFont = CreateFittedFont(
@@ -6287,6 +6806,31 @@ namespace Jvdp.LightDarkroomOverlay
             }
         }
 
+        internal static void CalculateTextAreas(
+            Size clientSize, out RectangleF titleArea,
+            out RectangleF detailArea)
+        {
+            float horizontalMargin = Math.Max(
+                36f, clientSize.Width * 0.07f);
+            float verticalMargin = Math.Max(
+                32f, clientSize.Height * 0.07f);
+            float contentWidth = Math.Max(
+                1f, clientSize.Width - horizontalMargin * 2f);
+            float contentHeight = Math.Max(
+                1f, clientSize.Height - verticalMargin * 2f);
+            float gap = Math.Max(16f, contentHeight * 0.035f);
+            float titleHeight = Math.Max(
+                54f, (contentHeight - gap) * 0.34f);
+            float messageHeight = Math.Max(
+                54f, contentHeight - titleHeight - gap);
+            titleArea = new RectangleF(
+                horizontalMargin, verticalMargin,
+                contentWidth, titleHeight);
+            detailArea = new RectangleF(
+                horizontalMargin, verticalMargin + titleHeight + gap,
+                contentWidth, messageHeight);
+        }
+
         private static StringFormat CreateCenteredTextFormat()
         {
             StringFormat format = new StringFormat();
@@ -6302,9 +6846,11 @@ namespace Jvdp.LightDarkroomOverlay
             SizeF available, StringFormat format)
         {
             string value = String.IsNullOrEmpty(text) ? " " : text;
-            const float absoluteMinimumSize = 5f;
+            float readableMinimum = Math.Max(
+                OverlayForm.MinimumReadableUiFontSize,
+                Math.Min(maximumSize, minimumSize));
             for (float size = maximumSize;
-                size >= absoluteMinimumSize; size -= 1f)
+                size >= readableMinimum; size -= 1f)
             {
                 Font candidate = new Font(family, size, style);
                 SizeF measured = graphics.MeasureString(
@@ -6315,8 +6861,7 @@ namespace Jvdp.LightDarkroomOverlay
                     return candidate;
                 candidate.Dispose();
             }
-            return new Font(family,
-                Math.Min(minimumSize, absoluteMinimumSize), style);
+            return new Font(family, readableMinimum, style);
         }
     }
     internal sealed class ComboItem
@@ -6370,6 +6915,10 @@ namespace Jvdp.LightDarkroomOverlay
             IntPtr dpiContext);
 
         [DllImport("user32.dll")]
+        private static extern IntPtr SetThreadDpiAwarenessContext(
+            IntPtr dpiContext);
+
+        [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -6383,15 +6932,7 @@ namespace Jvdp.LightDarkroomOverlay
         [STAThread]
         private static void Main(string[] args)
         {
-            try
-            {
-                if (!SetProcessDpiAwarenessContext(new IntPtr(-4)))
-                    SetProcessDPIAware();
-            }
-            catch (EntryPointNotFoundException)
-            {
-                SetProcessDPIAware();
-            }
+            EnablePerMonitorDpiAwareness();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             bool startInTray = Array.Exists(
@@ -6430,6 +6971,31 @@ namespace Jvdp.LightDarkroomOverlay
                 {
                     instanceMutex.ReleaseMutex();
                 }
+            }
+        }
+
+        internal static void EnablePerMonitorDpiAwareness()
+        {
+            IntPtr perMonitorV2 = new IntPtr(-4);
+            try
+            {
+                if (!SetProcessDpiAwarenessContext(perMonitorV2))
+                    SetProcessDPIAware();
+            }
+            catch (EntryPointNotFoundException)
+            {
+                SetProcessDPIAware();
+            }
+            try
+            {
+                // A deployment manifest or a host can establish process DPI
+                // awareness before Main runs. Explicitly setting the UI
+                // thread keeps every newly created form PerMonitorV2 in that
+                // situation as well, including when moved to a Surface panel.
+                SetThreadDpiAwarenessContext(perMonitorV2);
+            }
+            catch (EntryPointNotFoundException)
+            {
             }
         }
     }

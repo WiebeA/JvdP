@@ -164,38 +164,81 @@ namespace Jvdp.AutoUpdater
             using (Button cancelButton = new Button())
             {
                 form.Text = "JvdP automatic updates";
-                form.Width = 520;
-                form.Height = 225;
+                form.AutoScaleDimensions = new System.Drawing.SizeF(96f, 96f);
+                form.AutoScaleMode = AutoScaleMode.Dpi;
+                form.Font = new System.Drawing.Font(
+                    "Segoe UI", 10, System.Drawing.FontStyle.Regular);
+                form.ClientSize = new System.Drawing.Size(560, 240);
+                form.MinimumSize = new System.Drawing.Size(540, 265);
                 form.StartPosition = FormStartPosition.CenterScreen;
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
 
                 explanation.Text =
-                    "Updates are downloaded from the public WiebeA/JvdP " +
-                    "repository. No GitHub account or token is required.";
-                explanation.SetBounds(20, 18, 465, 45);
+                    "Updates worden uit de openbare WiebeA/JvdP-repository " +
+                    "opgehaald. Hiervoor is geen GitHub-account nodig.";
+                explanation.AutoSize = true;
+                explanation.MaximumSize = new System.Drawing.Size(500, 0);
+                explanation.Dock = DockStyle.Fill;
+                explanation.Margin = new Padding(0, 0, 0, 18);
 
-                channelLabel.Text = "Update channel";
-                channelLabel.SetBounds(20, 82, 120, 22);
+                channelLabel.Text = "Updatekanaal";
+                channelLabel.AutoSize = true;
+                channelLabel.Dock = DockStyle.Fill;
+                channelLabel.Margin = new Padding(0, 8, 18, 0);
                 channelBox.DropDownStyle = ComboBoxStyle.DropDownList;
                 channelBox.Items.AddRange(new object[] { "stable", "test" });
                 channelBox.SelectedItem = LoadChannel();
                 if (channelBox.SelectedIndex < 0)
                     channelBox.SelectedIndex = 0;
-                channelBox.SetBounds(145, 80, 160, 25);
+                channelBox.Dock = DockStyle.Fill;
+                channelBox.MinimumSize = new System.Drawing.Size(180, 0);
+                channelBox.Margin = Padding.Empty;
 
-                saveButton.Text = "Save";
+                saveButton.Text = "Opslaan";
                 saveButton.DialogResult = DialogResult.OK;
-                saveButton.SetBounds(305, 130, 85, 30);
-                cancelButton.Text = "Cancel";
+                saveButton.AutoSize = true;
+                saveButton.MinimumSize = new System.Drawing.Size(110, 42);
+                saveButton.Padding = new Padding(14, 0, 14, 0);
+                cancelButton.Text = "Annuleren";
                 cancelButton.DialogResult = DialogResult.Cancel;
-                cancelButton.SetBounds(400, 130, 85, 30);
+                cancelButton.AutoSize = true;
+                cancelButton.MinimumSize = new System.Drawing.Size(110, 42);
+                cancelButton.Padding = new Padding(14, 0, 14, 0);
 
-                form.Controls.AddRange(new Control[] {
-                    explanation, channelLabel,
-                    channelBox, saveButton, cancelButton
-                });
+                TableLayoutPanel root = new TableLayoutPanel();
+                root.Dock = DockStyle.Fill;
+                root.AutoSize = true;
+                root.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                root.Padding = new Padding(20);
+                root.ColumnCount = 2;
+                root.RowCount = 3;
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                root.ColumnStyles.Add(
+                    new ColumnStyle(SizeType.Percent, 100));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.Controls.Add(explanation, 0, 0);
+                root.SetColumnSpan(explanation, 2);
+                root.Controls.Add(channelLabel, 0, 1);
+                root.Controls.Add(channelBox, 1, 1);
+
+                FlowLayoutPanel actions = new FlowLayoutPanel();
+                actions.AutoSize = true;
+                actions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                actions.Dock = DockStyle.Fill;
+                actions.FlowDirection = FlowDirection.RightToLeft;
+                actions.WrapContents = true;
+                actions.Margin = new Padding(0, 24, 0, 0);
+                cancelButton.Margin = new Padding(8, 0, 0, 0);
+                saveButton.Margin = Padding.Empty;
+                actions.Controls.Add(cancelButton);
+                actions.Controls.Add(saveButton);
+                root.Controls.Add(actions, 0, 2);
+                root.SetColumnSpan(actions, 2);
+                form.Controls.Add(root);
                 form.AcceptButton = saveButton;
                 form.CancelButton = cancelButton;
 

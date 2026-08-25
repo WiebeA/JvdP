@@ -23,6 +23,9 @@ jobs:
       - name: Build Windows applications and ESP firmware
         shell: pwsh
         run: ./build.ps1
+      - name: Verify 10-size Windows layout matrix
+        shell: pwsh
+        run: ./test-layout-matrix.ps1 -SkipBuild
       - uses: actions/upload-artifact@v7
         with:
           name: jvdp-${{ github.sha }}

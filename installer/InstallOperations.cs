@@ -23,8 +23,11 @@ namespace Jvdp.LightDarkroomInstaller
                 Path.Combine(installDirectory, InstalledExeName);
             string installedUpdater =
                 Path.Combine(installDirectory, UpdaterExeName);
+            string installedConfig =
+                Path.Combine(installDirectory, InstalledConfigName);
             string stagedExe = installedExe + ".new";
             string stagedUpdater = installedUpdater + ".new";
+            string stagedConfig = installedConfig + ".new";
             string installedUninstaller =
                 Path.Combine(installDirectory, UninstallerName);
 
@@ -35,10 +38,13 @@ namespace Jvdp.LightDarkroomInstaller
 
             ExtractPayload(PayloadResource, stagedExe);
             ExtractPayload(UpdaterResource, stagedUpdater);
+            ExtractPayload(OverlayConfigResource, stagedConfig);
             ValidatePortableExecutable(stagedExe, "overlay");
             ValidatePortableExecutable(stagedUpdater, "updater");
+            ValidateConfiguration(stagedConfig);
             ReplaceStagedFile(stagedExe, installedExe);
             ReplaceStagedFile(stagedUpdater, installedUpdater);
+            ReplaceStagedFile(stagedConfig, installedConfig);
             string installedReleaseTag =
                 WriteInstallMetadata(installDirectory);
 
@@ -172,6 +178,17 @@ namespace Jvdp.LightDarkroomInstaller
             throw new IOException(
                 "Het actieve programmabestand kon na meerdere pogingen " +
                 "niet veilig worden vervangen.", lastError);
+        }
+
+        private static void ValidateConfiguration(string path)
+        {
+            string content = File.ReadAllText(path);
+            if (content.IndexOf("DpiAwareness",
+                    StringComparison.OrdinalIgnoreCase) < 0 ||
+                content.IndexOf("PerMonitorV2",
+                    StringComparison.OrdinalIgnoreCase) < 0)
+                throw new InvalidDataException(
+                    "De DPI-configuratie van de overlay is onvolledig.");
         }
 
         private static string WriteInstallMetadata(string installDirectory)
