@@ -1,4 +1,4 @@
-# Design QA — JvdP Lichtregeling 24.5.2
+# Design QA — JvdP Lichtregeling 24.5.3
 
 ## Comparison target
 
@@ -17,7 +17,9 @@ No actionable P0, P1 or P2 visual differences remain.
 - The minimum-size capture shows complete labels and complete `Opslaan` and `Terug` buttons.
 - The maximized capture preserves the same hierarchy without stretched text, collisions or detached controls.
 - The Overlay settings tab uses the same shared header and footer, and its title, message editor and preview remain within their own cards.
-- The update status line uses ellipsis when booth/status text exceeds the available width; it cannot render through the update button or navigation.
+- The update status row grows and wraps when booth/status text needs more room; text is never replaced by an ellipsis or rendered through the update button or navigation.
+- Both forms now have an explicit 96-DPI design baseline. Runtime geometry uses the monitor DPI while the responsive font scale uses logical window dimensions, preventing the former double-scaling on Surface displays.
+- A final text-fit guard remeasures every visible fixed-size label and button after text, size or DPI changes. Content-driven rows grow first; font reduction is only a last-resort safety net.
 
 ## Interaction verification
 
@@ -45,6 +47,6 @@ No actionable P0, P1 or P2 visual differences remain.
 
 ## Follow-up hardware test
 
-- A physical Microsoft Surface at 150% and 200% Windows scaling remains a useful booth-hardware regression check, but the controls now use non-overlapping layout cells and measured preferred sizes rather than collision-prone fixed positions.
+- The implementation now has explicit DPI baselines, DPI-scaled geometry, measured button widths, content-driven rows and non-overlapping layout cells. It was visually tested at minimum and maximized window sizes on the current Windows system. A short booth smoke test at the booth's actual 150%/200% display scaling remains part of rollout verification.
 
 final result: passed

@@ -208,8 +208,10 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void SetInteractiveLightValue(int mouseX)
         {
-            int barLeft = 19;
-            int barRight = Math.Max(barLeft + 1, ClientSize.Width - 19);
+            float paintScale = GetPaintScale();
+            int barLeft = (int)Math.Round(19 * paintScale);
+            int barRight = Math.Max(barLeft + 1,
+                ClientSize.Width - (int)Math.Round(19 * paintScale));
             int value = (int)Math.Round(
                 100.0 * (mouseX - barLeft) / (barRight - barLeft));
             value = Math.Max(0, Math.Min(100, value));
@@ -252,6 +254,7 @@ namespace Jvdp.LightDarkroomOverlay
             int cellWidth = Math.Max(1, content.Width / bands.Count);
             int lower = 0;
             int activeIndex = -1;
+            float paintScale = GetPaintScale();
             using (Font rangeFont = new Font(
                 "Segoe UI", 9.5f * visualScale, FontStyle.Bold))
             using (Font isoFont = new Font(
@@ -287,19 +290,23 @@ namespace Jvdp.LightDarkroomOverlay
                         : Color.FromArgb(62, 68, 77);
                     TextRenderer.DrawText(e.Graphics,
                         lower + "–" + band.MaximumLight, rangeFont,
-                        new Rectangle(left + 4,
-                            content.Top + (int)Math.Round(8 * visualScale),
-                            Math.Max(1, right - left - 8),
-                            (int)Math.Round(24 * visualScale)),
+                        new Rectangle(
+                            left + (int)Math.Round(4 * paintScale),
+                            content.Top + (int)Math.Round(8 * paintScale),
+                            Math.Max(1, right - left -
+                                (int)Math.Round(8 * paintScale)),
+                            (int)Math.Round(24 * paintScale)),
                         rangeColor, TextFormatFlags.HorizontalCenter |
                         TextFormatFlags.VerticalCenter |
                         TextFormatFlags.NoPadding);
                     TextRenderer.DrawText(e.Graphics,
                         "ISO " + band.Iso, isoFont,
-                        new Rectangle(left + 4,
-                            content.Top + (int)Math.Round(34 * visualScale),
-                            Math.Max(1, right - left - 8),
-                            (int)Math.Round(23 * visualScale)),
+                        new Rectangle(
+                            left + (int)Math.Round(4 * paintScale),
+                            content.Top + (int)Math.Round(34 * paintScale),
+                            Math.Max(1, right - left -
+                                (int)Math.Round(8 * paintScale)),
+                            (int)Math.Round(23 * paintScale)),
                         active ? Color.FromArgb(20, 102, 196) :
                             Color.FromArgb(101, 108, 118),
                         TextFormatFlags.HorizontalCenter |
@@ -309,11 +316,11 @@ namespace Jvdp.LightDarkroomOverlay
                 }
             }
 
-            int barY = content.Bottom - (int)Math.Round(19 * visualScale);
-            int barLeft = content.Left + (int)Math.Round(18 * visualScale);
-            int barRight = content.Right - (int)Math.Round(18 * visualScale);
+            int barY = content.Bottom - (int)Math.Round(19 * paintScale);
+            int barLeft = content.Left + (int)Math.Round(18 * paintScale);
+            int barRight = content.Right - (int)Math.Round(18 * paintScale);
             using (Pen baseBar = new Pen(
-                Color.FromArgb(190, 196, 204), 5f * visualScale))
+                Color.FromArgb(190, 196, 204), 5f * paintScale))
             {
                 baseBar.StartCap = System.Drawing.Drawing2D.LineCap.Round;
                 baseBar.EndCap = System.Drawing.Drawing2D.LineCap.Round;
@@ -326,7 +333,7 @@ namespace Jvdp.LightDarkroomOverlay
                 int segmentRight = barLeft +
                     (barRight - barLeft) * (activeIndex + 1) / bands.Count;
                 using (Pen activeBar = new Pen(
-                    Color.FromArgb(31, 111, 235), 5f * visualScale))
+                    Color.FromArgb(31, 111, 235), 5f * paintScale))
                 {
                     activeBar.StartCap = System.Drawing.Drawing2D.LineCap.Round;
                     activeBar.EndCap = System.Drawing.Drawing2D.LineCap.Round;
@@ -340,17 +347,23 @@ namespace Jvdp.LightDarkroomOverlay
                     (barRight - barLeft) * Math.Max(0,
                         Math.Min(100, lightValue)) / 100.0);
                 int markerRadius = (int)Math.Round(
-                    (Interactive ? 11 : 8) * visualScale);
+                    (Interactive ? 11 : 8) * paintScale);
                 using (SolidBrush marker = new SolidBrush(
                     Color.FromArgb(31, 111, 235)))
                     e.Graphics.FillEllipse(marker, markerX - markerRadius,
                         barY - markerRadius, markerRadius * 2,
                         markerRadius * 2);
-                using (Pen whiteRing = new Pen(Color.White, 2f))
+                using (Pen whiteRing = new Pen(
+                    Color.White, 2f * paintScale))
                     e.Graphics.DrawEllipse(whiteRing,
                         markerX - markerRadius, barY - markerRadius,
                         markerRadius * 2, markerRadius * 2);
             }
+        }
+
+        private float GetPaintScale()
+        {
+            return visualScale * Math.Max(1f, DeviceDpi / 96f);
         }
     }
 
@@ -427,6 +440,14 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly LightRangeControl rangeControl;
         private readonly TableLayoutPanel metrics;
         private readonly FlowLayoutPanel dashboard;
+        private readonly Panel mappingPanel;
+        private readonly Label mappingTitleLabel;
+        private readonly Panel profilePanel;
+        private readonly Panel detailsHeader;
+        private readonly TableLayoutPanel actionPanel;
+        private readonly Panel mainHeaderPanel;
+        private readonly Label mainTitleLabel;
+        private readonly Panel mainHeaderDivider;
         private readonly Label versionFooterLabel;
         private readonly Button settingsButton;
         private IsoMappingForm settingsPage;
@@ -492,6 +513,8 @@ namespace Jvdp.LightDarkroomOverlay
         private string customCoverMessage = DefaultCoverMessage;
         private readonly Dictionary<Control, float> responsiveFontSizes =
             new Dictionary<Control, float>();
+        private readonly Dictionary<Control, float> textFitBaseFontSizes =
+            new Dictionary<Control, float>();
         private readonly Dictionary<Control, Rectangle>
             responsiveDashboardBounds =
                 new Dictionary<Control, Rectangle>();
@@ -499,6 +522,9 @@ namespace Jvdp.LightDarkroomOverlay
             responsiveDashboardMargins =
                 new Dictionary<Control, Padding>();
         private float lastResponsiveScale = -1f;
+        private float lastResponsiveDpiScale = -1f;
+        private bool textFitActive;
+        private bool mainChromeLayoutActive;
 
         private static readonly int[] SupportedIsoValues = {
             100, 125, 160, 200, 250, 320, 400, 500, 640, 800,
@@ -512,6 +538,7 @@ namespace Jvdp.LightDarkroomOverlay
             Icon applicationIcon = Icon.ExtractAssociatedIcon(
                 Application.ExecutablePath);
             Icon = applicationIcon ?? SystemIcons.Information;
+            AutoScaleDimensions = new SizeF(96f, 96f);
             AutoScaleMode = AutoScaleMode.Dpi;
             FormBorderStyle = FormBorderStyle.Sizable;
             ClientSize = new Size(1240, 820);
@@ -571,22 +598,27 @@ namespace Jvdp.LightDarkroomOverlay
             Location = initialLocation;
             WindowState = FormWindowState.Maximized;
 
-            Panel header = new Panel();
-            header.BackColor = Color.White;
-            header.SetBounds(0, 0, ClientSize.Width, 64);
-            header.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+            mainHeaderPanel = new Panel();
+            mainHeaderPanel.BackColor = Color.White;
+            mainHeaderPanel.SetBounds(0, 0, ClientSize.Width, 64);
+            mainHeaderPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left |
                 AnchorStyles.Right;
-            Controls.Add(header);
+            Controls.Add(mainHeaderPanel);
 
-            Label title = MakeLabel(
+            mainTitleLabel = MakeLabel(
                 "JvdP Lichtregeling", 18, FontStyle.Bold,
                 Color.FromArgb(18, 22, 27));
-            title.SetBounds(24, 8, 270, 48);
-            header.Controls.Add(title);
+            // The header is measured explicitly. AutoSize can re-apply a
+            // stale pre-DPI preferred width when an embedded settings form
+            // creates its handle, which used to leave only part of the title.
+            mainTitleLabel.AutoSize = false;
+            mainTitleLabel.SetBounds(24, 8, 270, 48);
+            mainHeaderPanel.Controls.Add(mainTitleLabel);
 
             settingsButton = MakeLightButton("Instellingen", false);
             settingsButton.AccessibleName = "Profielinstellingen openen";
-            settingsButton.SetBounds(header.Width - 264, 12, 240, 40);
+            settingsButton.SetBounds(
+                mainHeaderPanel.Width - 264, 12, 240, 40);
             settingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             settingsButton.Click += delegate
             {
@@ -600,7 +632,7 @@ namespace Jvdp.LightDarkroomOverlay
                     ShowIsoMappingSettings();
                 }
             };
-            header.Controls.Add(settingsButton);
+            mainHeaderPanel.Controls.Add(settingsButton);
 
             modeLabel = MakeLabel(
                 "Automatisch actief", 10, FontStyle.Bold,
@@ -617,23 +649,34 @@ namespace Jvdp.LightDarkroomOverlay
 
             statusButton = MakeLightButton("Bezig met verbinden", false);
             statusButton.AccessibleName = "Status en bediening openen";
-            statusButton.SetBounds((header.Width - 220) / 2, 12, 220, 40);
+            statusButton.SetBounds(
+                (mainHeaderPanel.Width - 220) / 2, 12, 220, 40);
             statusButton.Anchor = AnchorStyles.Top;
             statusButton.Click += delegate { ToggleStatusPanel(); };
-            header.Controls.Add(statusButton);
-            header.SizeChanged += delegate
-            {
-                statusButton.Left =
-                    Math.Max(270, (header.ClientSize.Width -
-                        statusButton.Width) / 2);
-            };
+            mainHeaderPanel.Controls.Add(statusButton);
 
-            Panel headerDivider = new Panel();
-            headerDivider.BackColor = Color.FromArgb(218, 222, 229);
-            headerDivider.SetBounds(0, 63, header.Width, 1);
-            headerDivider.Anchor = AnchorStyles.Left | AnchorStyles.Right |
+            mainHeaderDivider = new Panel();
+            mainHeaderDivider.BackColor = Color.FromArgb(218, 222, 229);
+            mainHeaderDivider.SetBounds(
+                0, 63, mainHeaderPanel.Width, 1);
+            mainHeaderDivider.Anchor = AnchorStyles.Left | AnchorStyles.Right |
                 AnchorStyles.Bottom;
-            header.Controls.Add(headerDivider);
+            mainHeaderPanel.Controls.Add(mainHeaderDivider);
+            mainHeaderPanel.SizeChanged += delegate { LayoutMainChrome(); };
+            mainTitleLabel.LocationChanged +=
+                delegate { LayoutMainChrome(); };
+            mainTitleLabel.SizeChanged +=
+                delegate { LayoutMainChrome(); };
+            settingsButton.TextChanged += delegate { LayoutMainChrome(); };
+            settingsButton.FontChanged += delegate { LayoutMainChrome(); };
+            settingsButton.LocationChanged +=
+                delegate { LayoutMainChrome(); };
+            settingsButton.SizeChanged += delegate { LayoutMainChrome(); };
+            statusButton.TextChanged += delegate { LayoutMainChrome(); };
+            statusButton.FontChanged += delegate { LayoutMainChrome(); };
+            statusButton.LocationChanged +=
+                delegate { LayoutMainChrome(); };
+            statusButton.SizeChanged += delegate { LayoutMainChrome(); };
 
             ResizeEnd += delegate
             {
@@ -643,6 +686,7 @@ namespace Jvdp.LightDarkroomOverlay
             Resize += delegate
             {
                 HideInTrayWhenMinimized();
+                LayoutMainChrome();
                 PositionStatusPanel();
                 ApplyResponsiveTypography();
             };
@@ -674,15 +718,15 @@ namespace Jvdp.LightDarkroomOverlay
             Controls.Add(versionFooterLabel);
 
             int sectionWidth = Math.Max(640, dashboard.ClientSize.Width - 68);
-            Panel mappingPanel = MakeLightSurface(sectionWidth, 264);
+            mappingPanel = MakeLightSurface(sectionWidth, 264);
             mappingPanel.Margin = new Padding(0, 0, 0, 12);
             dashboard.Controls.Add(mappingPanel);
 
-            Label mappingTitle = MakeLabel(
+            mappingTitleLabel = MakeLabel(
                 "Live lichtwaarde → Doel-ISO", 13, FontStyle.Regular,
                 Color.FromArgb(31, 35, 40));
-            mappingTitle.SetBounds(20, 10, 370, 34);
-            mappingPanel.Controls.Add(mappingTitle);
+            mappingTitleLabel.SetBounds(20, 10, 370, 34);
+            mappingPanel.Controls.Add(mappingTitleLabel);
 
             lastMeasuredLabel = MakeLabel(
                 "Wachten op eerste meting", 9, FontStyle.Regular,
@@ -761,7 +805,7 @@ namespace Jvdp.LightDarkroomOverlay
                 "", 9, FontStyle.Regular, Color.FromArgb(99, 108, 118));
             mappingSummaryLabel.Visible = false;
 
-            Panel profilePanel = MakeLightSurface(sectionWidth, 62);
+            profilePanel = MakeLightSurface(sectionWidth, 62);
             profilePanel.Margin = new Padding(0, 0, 0, 10);
             dashboard.Controls.Add(profilePanel);
             Label profileCaption = MakeLabel(
@@ -782,7 +826,7 @@ namespace Jvdp.LightDarkroomOverlay
             mappingSettingsButton.Click += delegate { ShowIsoMappingSettings(); };
             profilePanel.Controls.Add(mappingSettingsButton);
 
-            Panel detailsHeader = MakeLightSurface(sectionWidth, 52);
+            detailsHeader = MakeLightSurface(sectionWidth, 52);
             detailsHeader.Margin = new Padding(0, 0, 0, 4);
             dashboard.Controls.Add(detailsHeader);
             detailsToggleButton = MakeLightButton(
@@ -901,7 +945,7 @@ namespace Jvdp.LightDarkroomOverlay
             actionLabel.AccessibleName = "Actuele activiteit";
             dashboard.Controls.Add(actionLabel);
 
-            TableLayoutPanel actionPanel = new TableLayoutPanel();
+            actionPanel = new TableLayoutPanel();
             actionPanel.ColumnCount = 2;
             actionPanel.RowCount = 1;
             actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -928,37 +972,7 @@ namespace Jvdp.LightDarkroomOverlay
 
             dashboard.SizeChanged += delegate
             {
-                int width = Math.Max(640,
-                    dashboard.ClientSize.Width - dashboard.Padding.Horizontal -
-                    (dashboard.VerticalScroll.Visible
-                        ? SystemInformation.VerticalScrollBarWidth : 0) - 20);
-                mappingPanel.Width = width;
-                profilePanel.Width = width;
-                detailsHeader.Width = width;
-                detailsPanel.Width = width;
-                actionLabel.Width = width;
-                actionPanel.Width = width;
-                float scale = GetResponsiveScale();
-                mappingTitle.Width = (int)Math.Round(370 * scale);
-                lastMeasuredLabel.Width = (int)Math.Round(280 * scale);
-                lastMeasuredLabel.Left = mappingPanel.Width -
-                    lastMeasuredLabel.Width - 20;
-                mappingSettingsButton.Width =
-                    (int)Math.Round(154 * scale);
-                mappingSettingsButton.Left = profilePanel.Width -
-                    mappingSettingsButton.Width - 18;
-                profileNameLabel.Width = Math.Max(220,
-                    mappingSettingsButton.Left - 36);
-                detailsToggleButton.Width = Math.Min(
-                    (int)Math.Round(360 * scale),
-                    Math.Max(360, detailsHeader.Width - 390));
-                detailsSummaryLabel.Width = Math.Min(
-                    (int)Math.Round(372 * scale),
-                    Math.Max(280, detailsHeader.Width -
-                        detailsToggleButton.Right - 36));
-                detailsSummaryLabel.Left = detailsHeader.Width -
-                    detailsSummaryLabel.Width - 18;
-                dashboard.PerformLayout();
+                LayoutDashboardWidths();
             };
             UpdateMappingControls();
 
@@ -1041,6 +1055,8 @@ namespace Jvdp.LightDarkroomOverlay
 
             CaptureResponsiveFonts(dashboard);
             CaptureResponsiveDashboardLayout(dashboard);
+            CaptureTextFitFonts(this);
+            LayoutMainChrome();
             ApplyResponsiveTypography();
 
             Shown += delegate
@@ -1095,65 +1111,600 @@ namespace Jvdp.LightDarkroomOverlay
                 CaptureResponsiveFonts(child);
         }
 
+        private void CaptureTextFitFonts(Control root)
+        {
+            if (root == null)
+                return;
+            if ((root is Label || root is Button) &&
+                !textFitBaseFontSizes.ContainsKey(root))
+            {
+                textFitBaseFontSizes.Add(root, root.Font.Size);
+                root.TextChanged += delegate
+                {
+                    if (!textFitActive && !root.IsDisposed)
+                        FitTextControl(root);
+                };
+            }
+            foreach (Control child in root.Controls)
+                CaptureTextFitFonts(child);
+        }
+
+        private void EnsureTextFitsWithinBounds(Control root)
+        {
+            if (textFitActive || root == null)
+                return;
+            textFitActive = true;
+            try
+            {
+                RestoreTargetFonts(root);
+                FitTextTree(root);
+            }
+            finally
+            {
+                textFitActive = false;
+            }
+        }
+
+        private void RestoreTargetFonts(Control root)
+        {
+            float baseSize;
+            if (textFitBaseFontSizes.TryGetValue(root, out baseSize))
+            {
+                float target = responsiveFontSizes.ContainsKey(root)
+                    ? baseSize * GetResponsiveScale()
+                    : baseSize;
+                if (Math.Abs(root.Font.Size - target) > 0.05f)
+                    ReplaceControlFont(root, new Font(
+                        "Segoe UI", target, root.Font.Style));
+            }
+            foreach (Control child in root.Controls)
+                RestoreTargetFonts(child);
+        }
+
+        internal static void FitTextTree(Control root)
+        {
+            if (root.Visible &&
+                (root is Label || root is Button))
+                FitTextControl(root);
+            foreach (Control child in root.Controls)
+                FitTextTree(child);
+        }
+
+        internal static bool FitTextControl(Control control)
+        {
+            if (control.AutoSize || String.IsNullOrEmpty(control.Text) ||
+                control.ClientSize.Width <= 0 ||
+                control.ClientSize.Height <= 0)
+                return true;
+
+            float dpiScale = Math.Max(1f, control.DeviceDpi / 96f);
+            int horizontalInset = (int)Math.Ceiling(
+                (control is Button ? 24 : 4) * dpiScale);
+            int verticalInset = (int)Math.Ceiling(
+                (control is Button ? 14 : 2) * dpiScale);
+            int availableWidth = Math.Max(1,
+                control.ClientSize.Width - control.Padding.Horizontal -
+                horizontalInset);
+            int availableHeight = Math.Max(1,
+                control.ClientSize.Height - control.Padding.Vertical -
+                verticalInset);
+            float targetSize = control.Font.Size;
+            FontStyle style = control.Font.Style;
+            string family = control.Font.FontFamily.Name;
+            bool isButton = control is Button;
+
+            for (float size = targetSize; size >= 5f; size -= 0.5f)
+            {
+                using (Font candidate = new Font(family, size, style))
+                {
+                    Size line = TextRenderer.MeasureText(
+                        "Ag", candidate, Size.Empty,
+                        TextFormatFlags.NoPadding |
+                        TextFormatFlags.SingleLine);
+                    bool multiline = !isButton &&
+                        (control.Text.IndexOfAny(
+                            new[] { '\r', '\n' }) >= 0 ||
+                         availableHeight >= line.Height * 2);
+                    TextFormatFlags flags = TextFormatFlags.NoPadding |
+                        TextFormatFlags.NoPrefix |
+                        (multiline
+                            ? TextFormatFlags.WordBreak
+                            : TextFormatFlags.SingleLine);
+                    Size measured = TextRenderer.MeasureText(
+                        control.Text, candidate,
+                        new Size(availableWidth,
+                            multiline ? Int32.MaxValue : availableHeight),
+                        flags);
+                    if (measured.Width <= availableWidth + 1 &&
+                        measured.Height <= availableHeight + 1)
+                    {
+                        if (Math.Abs(control.Font.Size - size) > 0.05f)
+                            ReplaceControlFont(control,
+                                new Font(family, size, style));
+                        return true;
+                    }
+                }
+            }
+
+            if (control.Font.Size > 5f)
+                ReplaceControlFont(control,
+                    new Font(family, 5f, style));
+            return ExpandControlForFullText(
+                control, horizontalInset, verticalInset);
+        }
+
+        private static bool ExpandControlForFullText(
+            Control control, int horizontalInset, int verticalInset)
+        {
+            bool isButton = control is Button;
+            int availableWidth = Math.Max(1,
+                control.ClientSize.Width - control.Padding.Horizontal -
+                horizontalInset);
+            TextFormatFlags flags = TextFormatFlags.NoPadding |
+                TextFormatFlags.NoPrefix |
+                (isButton
+                    ? TextFormatFlags.SingleLine
+                    : TextFormatFlags.WordBreak);
+            Size measured = TextRenderer.MeasureText(
+                control.Text, control.Font,
+                isButton
+                    ? Size.Empty
+                    : new Size(availableWidth, Int32.MaxValue),
+                flags);
+            int requiredWidth = isButton
+                ? measured.Width + control.Padding.Horizontal +
+                    horizontalInset
+                : Math.Max(control.Width,
+                    measured.Width + control.Padding.Horizontal +
+                    horizontalInset);
+            int requiredHeight = measured.Height +
+                control.Padding.Vertical + verticalInset;
+            Size originalSize = control.Size;
+            Size requiredSize = new Size(
+                Math.Max(originalSize.Width, requiredWidth),
+                Math.Max(originalSize.Height, requiredHeight));
+
+            control.MinimumSize = new Size(
+                Math.Max(control.MinimumSize.Width, requiredSize.Width),
+                Math.Max(control.MinimumSize.Height, requiredSize.Height));
+            if (control.Dock == DockStyle.None)
+                control.Size = requiredSize;
+
+            Label label = control as Label;
+            if (label != null)
+                label.AutoEllipsis = false;
+            ShiftFixedSiblingsAfterExpansion(
+                control, originalSize, requiredSize);
+            if (control.Parent != null)
+                control.Parent.PerformLayout();
+            EnsureScrollableExtent(control);
+
+            if (TextFitsAtCurrentSize(control))
+                return true;
+
+            // This branch is intentionally structural rather than another
+            // font reduction: AutoSize exposes the full text and the nearest
+            // scrollable ancestor receives an explicit content extent.
+            control.AutoSize = true;
+            if (label != null)
+                label.MaximumSize = new Size(requiredSize.Width, 0);
+            Button button = control as Button;
+            if (button != null)
+                button.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            if (control.Parent != null)
+                control.Parent.PerformLayout();
+            EnsureScrollableExtent(control);
+            return true;
+        }
+
+        private static bool TextFitsAtCurrentSize(Control control)
+        {
+            if (control.AutoSize || String.IsNullOrEmpty(control.Text))
+                return true;
+            float dpiScale = Math.Max(1f, control.DeviceDpi / 96f);
+            int horizontalInset = (int)Math.Ceiling(
+                (control is Button ? 24 : 4) * dpiScale);
+            int verticalInset = (int)Math.Ceiling(
+                (control is Button ? 14 : 2) * dpiScale);
+            int width = Math.Max(1,
+                control.ClientSize.Width - control.Padding.Horizontal -
+                horizontalInset);
+            int height = Math.Max(1,
+                control.ClientSize.Height - control.Padding.Vertical -
+                verticalInset);
+            bool multiline = !(control is Button);
+            Size measured = TextRenderer.MeasureText(
+                control.Text, control.Font,
+                new Size(width, multiline ? Int32.MaxValue : height),
+                TextFormatFlags.NoPadding |
+                TextFormatFlags.NoPrefix |
+                (multiline
+                    ? TextFormatFlags.WordBreak
+                    : TextFormatFlags.SingleLine));
+            return measured.Width <= width + 1 &&
+                measured.Height <= height + 1;
+        }
+
+        private static void ShiftFixedSiblingsAfterExpansion(
+            Control control, Size originalSize, Size requiredSize)
+        {
+            Control parent = control.Parent;
+            if (parent == null || parent is TableLayoutPanel ||
+                parent is FlowLayoutPanel)
+                return;
+            int addedHeight = requiredSize.Height - originalSize.Height;
+            int addedWidth = requiredSize.Width - originalSize.Width;
+            if (addedHeight <= 0 && addedWidth <= 0)
+                return;
+            Rectangle expanded = new Rectangle(
+                control.Location, requiredSize);
+            foreach (Control sibling in parent.Controls)
+            {
+                if (sibling == control || !sibling.Visible ||
+                    !expanded.IntersectsWith(sibling.Bounds))
+                    continue;
+                if (addedHeight > 0 &&
+                    sibling.Top >= control.Top + originalSize.Height)
+                    sibling.Top = expanded.Bottom + 4;
+                else if (addedWidth > 0 &&
+                    sibling.Left >= control.Left + originalSize.Width)
+                    sibling.Left = expanded.Right + 4;
+            }
+        }
+
+        private static void EnsureScrollableExtent(Control control)
+        {
+            Control current = control.Parent;
+            ScrollableControl scrollable = null;
+            int right = control.Right;
+            int bottom = control.Bottom;
+            while (current != null)
+            {
+                ScrollableControl candidate = current as ScrollableControl;
+                if (candidate != null && candidate.AutoScroll)
+                {
+                    scrollable = candidate;
+                    break;
+                }
+                right += current.Left;
+                bottom += current.Top;
+                current = current.Parent;
+            }
+            if (scrollable == null)
+            {
+                current = control.Parent;
+                right = control.Right;
+                bottom = control.Bottom;
+                while (current != null)
+                {
+                    ScrollableControl candidate =
+                        current as ScrollableControl;
+                    if (candidate != null)
+                    {
+                        scrollable = candidate;
+                        scrollable.AutoScroll = true;
+                        break;
+                    }
+                    right += current.Left;
+                    bottom += current.Top;
+                    current = current.Parent;
+                }
+            }
+            if (scrollable == null)
+                return;
+            scrollable.AutoScrollMinSize = new Size(
+                Math.Max(scrollable.AutoScrollMinSize.Width, right + 8),
+                Math.Max(scrollable.AutoScrollMinSize.Height, bottom + 8));
+        }
+
+        internal static void ReplaceControlFont(
+            Control control, Font replacement)
+        {
+            Font previous = control.Font;
+            control.Font = replacement;
+            if (previous != null && previous != replacement &&
+                !previous.IsSystemFont)
+                previous.Dispose();
+        }
+
         private void ApplyResponsiveTypography()
         {
             float scale = GetResponsiveScale();
-            if (Math.Abs(scale - lastResponsiveScale) < 0.025f)
-                return;
+            float dpiScale = GetCurrentDpiScale();
+            bool scaleChanged =
+                Math.Abs(scale - lastResponsiveScale) >= 0.025f ||
+                Math.Abs(dpiScale - lastResponsiveDpiScale) >= 0.01f;
             lastResponsiveScale = scale;
+            lastResponsiveDpiScale = dpiScale;
 
-            foreach (KeyValuePair<Control, float> item in
-                responsiveFontSizes)
+            if (scaleChanged)
             {
-                if (item.Key == null || item.Key.IsDisposed)
-                    continue;
-                item.Key.Font = new Font(
-                    "Segoe UI", item.Value * scale,
-                    item.Key.Font.Style);
-            }
-            if (rangeControl != null)
-                rangeControl.VisualScale = scale;
-            if (metrics != null && metrics.RowStyles.Count > 0)
-                metrics.RowStyles[0].Height =
-                    (int)Math.Ceiling(31 * scale);
-
-            foreach (KeyValuePair<Control, Rectangle> item in
-                responsiveDashboardBounds)
-            {
-                Control control = item.Key;
-                if (control == null || control.IsDisposed ||
-                    control.Dock != DockStyle.None)
-                    continue;
-                Rectangle basis = item.Value;
-                if (control.Parent == dashboard)
+                foreach (KeyValuePair<Control, float> item in
+                    responsiveFontSizes)
                 {
-                    control.Height = (int)Math.Round(
-                        basis.Height * scale);
-                    Padding margin;
-                    if (responsiveDashboardMargins.TryGetValue(
-                        control, out margin))
-                        control.Margin = new Padding(
-                            margin.Left,
-                            (int)Math.Round(margin.Top * scale),
-                            margin.Right,
-                            (int)Math.Round(margin.Bottom * scale));
-                    continue;
+                    if (item.Key == null || item.Key.IsDisposed)
+                        continue;
+                    ReplaceControlFont(item.Key, new Font(
+                        "Segoe UI", item.Value * scale,
+                        item.Key.Font.Style));
                 }
-                control.Top = (int)Math.Round(basis.Top * scale);
-                control.Height = (int)Math.Round(basis.Height * scale);
+                if (rangeControl != null)
+                    rangeControl.VisualScale = scale;
+                float layoutScale = scale * dpiScale;
+                if (metrics != null && metrics.RowStyles.Count > 0)
+                    metrics.RowStyles[0].Height =
+                        (int)Math.Ceiling(31 * layoutScale);
+
+                foreach (KeyValuePair<Control, Rectangle> item in
+                    responsiveDashboardBounds)
+                {
+                    Control control = item.Key;
+                    if (control == null || control.IsDisposed ||
+                        control.Dock != DockStyle.None)
+                        continue;
+                    Rectangle basis = item.Value;
+                    if (control.Parent == dashboard)
+                    {
+                        control.Height = (int)Math.Round(
+                            basis.Height * layoutScale);
+                        Padding margin;
+                        if (responsiveDashboardMargins.TryGetValue(
+                            control, out margin))
+                            control.Margin = new Padding(
+                                margin.Left,
+                                (int)Math.Round(
+                                    margin.Top * layoutScale),
+                                margin.Right,
+                                (int)Math.Round(
+                                    margin.Bottom * layoutScale));
+                        continue;
+                    }
+                    control.Top = (int)Math.Round(
+                        basis.Top * layoutScale);
+                    control.Height = (int)Math.Round(
+                        basis.Height * layoutScale);
+                }
+                dashboard.Padding = new Padding(
+                    (int)Math.Ceiling(24 * layoutScale),
+                    (int)Math.Ceiling(18 * layoutScale),
+                    (int)Math.Ceiling(24 * layoutScale),
+                    (int)Math.Ceiling(18 * layoutScale));
             }
-            dashboard.Padding = new Padding(
-                24, (int)Math.Round(18 * scale),
-                24, (int)Math.Round(18 * scale));
+            LayoutDashboardWidths();
             dashboard.PerformLayout();
+            EnsureTextFitsWithinBounds(this);
+        }
+
+        private float GetCurrentDpiScale()
+        {
+            return Math.Max(1f, DeviceDpi / 96f);
+        }
+
+        private int ScaleLogical(int value)
+        {
+            return Math.Max(1,
+                (int)Math.Ceiling(value * GetCurrentDpiScale()));
+        }
+
+        private void LayoutMainChrome()
+        {
+            if (mainHeaderPanel == null || mainTitleLabel == null ||
+                settingsButton == null || statusButton == null ||
+                mainChromeLayoutActive)
+                return;
+            mainChromeLayoutActive = true;
+            try
+            {
+
+                int margin = ScaleLogical(24);
+                int gap = ScaleLogical(12);
+                Size titleSize = TextRenderer.MeasureText(
+                    mainTitleLabel.Text, mainTitleLabel.Font,
+                    Size.Empty, TextFormatFlags.NoPadding |
+                    TextFormatFlags.SingleLine);
+                Size settingsSize = MeasureSafeButton(
+                    settingsButton, ScaleLogical(190), ScaleLogical(44));
+                Size statusSize = MeasureSafeButton(
+                    statusButton, ScaleLogical(220), ScaleLogical(44));
+                int rowHeight = Math.Max(
+                    Math.Max(titleSize.Height + ScaleLogical(16),
+                        settingsSize.Height + ScaleLogical(12)),
+                    statusSize.Height + ScaleLogical(12));
+
+                int settingsLeft = Math.Max(margin,
+                    ClientSize.Width - margin - settingsSize.Width);
+                int titleRight = margin + titleSize.Width;
+                int centeredStatusLeft = Math.Max(margin,
+                    (ClientSize.Width - statusSize.Width) / 2);
+                bool wrapStatus =
+                    centeredStatusLeft < titleRight + gap ||
+                    centeredStatusLeft + statusSize.Width >
+                        settingsLeft - gap;
+                int headerHeight = Math.Max(ScaleLogical(64),
+                    wrapStatus ? rowHeight * 2 : rowHeight);
+
+                mainHeaderPanel.SetBounds(
+                    0, 0, ClientSize.Width, headerHeight);
+                mainTitleLabel.SetBounds(
+                    margin,
+                    Math.Max(0,
+                        (rowHeight - titleSize.Height) / 2),
+                    Math.Max(1, titleSize.Width + ScaleLogical(4)),
+                    Math.Max(1, titleSize.Height + ScaleLogical(2)));
+                settingsButton.SetBounds(
+                    settingsLeft,
+                    Math.Max(0, (rowHeight - settingsSize.Height) / 2),
+                    settingsSize.Width, settingsSize.Height);
+                statusButton.SetBounds(
+                    Math.Max(margin,
+                        (ClientSize.Width - statusSize.Width) / 2),
+                    wrapStatus
+                        ? rowHeight + Math.Max(0,
+                            (rowHeight - statusSize.Height) / 2)
+                        : Math.Max(0,
+                            (rowHeight - statusSize.Height) / 2),
+                    statusSize.Width, statusSize.Height);
+
+                if (mainHeaderDivider != null)
+                    mainHeaderDivider.SetBounds(
+                        0, headerHeight - 1, ClientSize.Width, 1);
+
+                int footerHeight = ScaleLogical(32);
+                if (versionFooterLabel != null)
+                {
+                    Size footerText = TextRenderer.MeasureText(
+                        versionFooterLabel.Text, versionFooterLabel.Font,
+                        new Size(Math.Max(1,
+                            ClientSize.Width - margin * 2), Int32.MaxValue),
+                        TextFormatFlags.NoPadding |
+                        TextFormatFlags.SingleLine);
+                    footerHeight = Math.Max(footerHeight,
+                        footerText.Height + ScaleLogical(8));
+                    versionFooterLabel.SetBounds(
+                        margin, ClientSize.Height - footerHeight,
+                        Math.Max(1, ClientSize.Width - margin * 2),
+                        footerHeight);
+                }
+
+                int contentHeight = Math.Max(1,
+                    ClientSize.Height - headerHeight - footerHeight);
+                if (dashboard != null)
+                    dashboard.SetBounds(
+                        0, headerHeight, ClientSize.Width, contentHeight);
+                if (settingsPage != null && !settingsPage.IsDisposed)
+                    settingsPage.SetBounds(
+                        0, headerHeight, ClientSize.Width, contentHeight);
+                mainHeaderPanel.BringToFront();
+                if (versionFooterLabel != null)
+                    versionFooterLabel.BringToFront();
+                mainHeaderPanel.Invalidate(true);
+                if (settingsPage != null && !settingsPage.IsDisposed)
+                    mainHeaderPanel.Update();
+            }
+            finally
+            {
+                mainChromeLayoutActive = false;
+            }
+        }
+
+        private static Size MeasureSafeButton(
+            Button button, int minimumWidth, int minimumHeight)
+        {
+            Size measured = TextRenderer.MeasureText(
+                button.Text, button.Font, Size.Empty,
+                TextFormatFlags.NoPadding |
+                TextFormatFlags.SingleLine);
+            return new Size(
+                Math.Max(minimumWidth,
+                    measured.Width + Math.Max(24,
+                        button.Padding.Horizontal + 20)),
+                Math.Max(minimumHeight,
+                    measured.Height + Math.Max(16,
+                        button.Padding.Vertical + 12)));
         }
 
         private float GetResponsiveScale()
         {
-            float widthScale = ClientSize.Width / 1100f;
-            float heightScale = ClientSize.Height / 720f;
+            float dpiScale = GetCurrentDpiScale();
+            float widthScale = ClientSize.Width / dpiScale / 1100f;
+            float heightScale = ClientSize.Height / dpiScale / 720f;
             return Math.Max(1f,
                 Math.Min(1.45f, Math.Min(widthScale, heightScale)));
+        }
+
+        private void LayoutDashboardWidths()
+        {
+            if (dashboard == null || mappingPanel == null ||
+                mappingTitleLabel == null || profilePanel == null ||
+                detailsHeader == null || actionPanel == null)
+                return;
+
+            float layoutScale = GetResponsiveScale() *
+                GetCurrentDpiScale();
+            int side = (int)Math.Ceiling(20 * layoutScale);
+            int smallSide = (int)Math.Ceiling(18 * layoutScale);
+            int gap = (int)Math.Ceiling(12 * layoutScale);
+            int viewportWidth = Math.Max(1,
+                dashboard.ClientSize.Width - dashboard.Padding.Horizontal -
+                (dashboard.VerticalScroll.Visible
+                    ? SystemInformation.VerticalScrollBarWidth : 0) -
+                (int)Math.Ceiling(20 * layoutScale));
+
+            Size mappingTitleSize = MeasureSafeText(mappingTitleLabel);
+            Size measuredSize = MeasureSafeText(lastMeasuredLabel);
+            Size profileNameSize = MeasureSafeText(profileNameLabel);
+            Size profileButtonSize = MeasureSafeButton(
+                mappingSettingsButton,
+                (int)Math.Ceiling(154 * layoutScale),
+                (int)Math.Ceiling(42 * layoutScale));
+            Size detailsButtonText = MeasureSafeText(detailsToggleButton);
+            Size detailsSummarySize = MeasureSafeText(detailsSummaryLabel);
+
+            int mappingTitleWidth = Math.Max(
+                (int)Math.Ceiling(250 * layoutScale),
+                mappingTitleSize.Width + (int)Math.Ceiling(8 * layoutScale));
+            int measuredWidth = Math.Max(
+                (int)Math.Ceiling(260 * layoutScale),
+                measuredSize.Width + (int)Math.Ceiling(8 * layoutScale));
+            int detailsButtonWidth = Math.Max(
+                (int)Math.Ceiling(280 * layoutScale),
+                detailsButtonText.Width + (int)Math.Ceiling(28 * layoutScale));
+            int detailsSummaryWidth = Math.Max(
+                (int)Math.Ceiling(260 * layoutScale),
+                detailsSummarySize.Width + (int)Math.Ceiling(8 * layoutScale));
+            int profileTextWidth = Math.Max(
+                (int)Math.Ceiling(220 * layoutScale),
+                profileNameSize.Width + (int)Math.Ceiling(8 * layoutScale));
+
+            int sectionWidth = Math.Max(viewportWidth,
+                (int)Math.Ceiling(640 * layoutScale));
+            sectionWidth = Math.Max(sectionWidth,
+                side * 2 + mappingTitleWidth + gap + measuredWidth);
+            sectionWidth = Math.Max(sectionWidth,
+                smallSide * 2 + profileTextWidth + gap +
+                profileButtonSize.Width);
+            sectionWidth = Math.Max(sectionWidth,
+                smallSide * 2 + detailsButtonWidth + gap +
+                detailsSummaryWidth);
+
+            mappingPanel.Width = sectionWidth;
+            profilePanel.Width = sectionWidth;
+            detailsHeader.Width = sectionWidth;
+            detailsPanel.Width = sectionWidth;
+            actionLabel.Width = sectionWidth;
+            actionPanel.Width = sectionWidth;
+
+            mappingTitleLabel.Left = side;
+            mappingTitleLabel.Width = mappingTitleWidth;
+            lastMeasuredLabel.Left = sectionWidth - side - measuredWidth;
+            lastMeasuredLabel.Width = measuredWidth;
+            rangeControl.Left = side;
+            rangeControl.Width = Math.Max(1, sectionWidth - side * 2);
+            metrics.Left = side;
+            metrics.Width = Math.Max(1, sectionWidth - side * 2);
+
+            mappingSettingsButton.SetBounds(
+                sectionWidth - smallSide - profileButtonSize.Width,
+                mappingSettingsButton.Top,
+                profileButtonSize.Width,
+                profileButtonSize.Height);
+            profileNameLabel.Width = Math.Max(1,
+                mappingSettingsButton.Left - gap - profileNameLabel.Left);
+
+            detailsToggleButton.Width = detailsButtonWidth;
+            detailsSummaryLabel.Left =
+                sectionWidth - smallSide - detailsSummaryWidth;
+            detailsSummaryLabel.Width = detailsSummaryWidth;
+        }
+
+        private static Size MeasureSafeText(Control control)
+        {
+            return TextRenderer.MeasureText(
+                String.IsNullOrEmpty(control.Text) ? " " : control.Text,
+                control.Font, Size.Empty,
+                TextFormatFlags.NoPadding |
+                TextFormatFlags.NoPrefix |
+                TextFormatFlags.SingleLine);
         }
 
         private void CaptureResponsiveDashboardLayout(Control root)
@@ -1208,11 +1759,18 @@ namespace Jvdp.LightDarkroomOverlay
         {
             if (statusPanel == null)
                 return;
-            int width = Math.Min(500, Math.Max(420, ClientSize.Width - 48));
-            int height = 270;
+            int contentTop = mainHeaderPanel == null
+                ? ScaleLogical(64) : mainHeaderPanel.Bottom;
+            int width = Math.Min(
+                ScaleLogical(500),
+                Math.Max(ScaleLogical(420),
+                    ClientSize.Width - ScaleLogical(48)));
+            int height = ScaleLogical(270);
             statusPanel.SetBounds(
-                Math.Max(12, (ClientSize.Width - width) / 2),
-                64 + Math.Max(18, (ClientSize.Height - 64 - height) / 2),
+                Math.Max(ScaleLogical(12),
+                    (ClientSize.Width - width) / 2),
+                contentTop + Math.Max(ScaleLogical(18),
+                    (ClientSize.Height - contentTop - height) / 2),
                 width, height);
         }
 
@@ -1757,8 +2315,10 @@ namespace Jvdp.LightDarkroomOverlay
             settingsPage = page;
             page.TopLevel = false;
             page.FormBorderStyle = FormBorderStyle.None;
-            page.SetBounds(0, 64, ClientSize.Width,
-                Math.Max(1, ClientSize.Height - 92));
+            int contentTop = mainHeaderPanel.Bottom;
+            int contentBottom = versionFooterLabel.Top;
+            page.SetBounds(0, contentTop, ClientSize.Width,
+                Math.Max(1, contentBottom - contentTop));
             page.Anchor = AnchorStyles.Top | AnchorStyles.Bottom |
                 AnchorStyles.Left | AnchorStyles.Right;
             page.FormClosed += delegate
@@ -1798,13 +2358,40 @@ namespace Jvdp.LightDarkroomOverlay
                 settingsButton.AccessibleName =
                     "Profielinstellingen openen";
             };
-            Controls.Add(page);
-            dashboard.Visible = false;
-            settingsButton.Text = "Terug naar dashboard";
-            settingsButton.AccessibleName = "Terug naar dashboard";
-            page.BringToFront();
-            page.Show();
-            page.Focus();
+            // Creating the embedded form can briefly trigger a DPI auto-scale
+            // pass on its siblings. Keep the header off-screen during that
+            // pass, then publish only the final measured layout.
+            mainHeaderPanel.Visible = false;
+            try
+            {
+                Controls.Add(page);
+                dashboard.Visible = false;
+                settingsButton.Text = "Terug naar dashboard";
+                settingsButton.AccessibleName = "Terug naar dashboard";
+                page.BringToFront();
+                page.Show();
+                page.Focus();
+                LayoutMainChrome();
+            }
+            finally
+            {
+                try
+                {
+                    BeginInvoke(new MethodInvoker(delegate
+                    {
+                        if (IsDisposed)
+                            return;
+                        LayoutMainChrome();
+                        mainHeaderPanel.Visible = true;
+                        mainHeaderPanel.BringToFront();
+                        mainHeaderPanel.Refresh();
+                    }));
+                }
+                catch
+                {
+                    mainHeaderPanel.Visible = true;
+                }
+            }
         }
 
         private static string BuildVersionFooterText(string localRoot)
@@ -3545,6 +4132,11 @@ namespace Jvdp.LightDarkroomOverlay
                 : (manualActionRunning
                     ? Color.FromArgb(137, 87, 0)
                     : Color.FromArgb(71, 78, 88));
+            LayoutMainChrome();
+            LayoutDashboardWidths();
+            FitTextControl(lastMeasuredLabel);
+            FitTextControl(detailsSummaryLabel);
+            FitTextControl(actionLabel);
         }
 
         private void UpdateHeaderStatus(
@@ -4082,7 +4674,10 @@ namespace Jvdp.LightDarkroomOverlay
         private bool dirty;
         private readonly string updaterExecutablePath;
         private readonly string updaterStatusPath;
+        private readonly Dictionary<Control, float> textFitBaseFontSizes =
+            new Dictionary<Control, float>();
         private DateTime updateCheckStartedAtUtc = DateTime.MinValue;
+        private bool textFitActive;
 
         public bool UseCustomMapping { get; private set; }
         public List<IsoBand> CustomBands { get; private set; }
@@ -4122,6 +4717,7 @@ namespace Jvdp.LightDarkroomOverlay
             ShowInTaskbar = false;
             BackColor = Background;
             ForeColor = TextPrimary;
+            AutoScaleDimensions = new SizeF(96f, 96f);
             AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Segoe UI", 10, FontStyle.Regular);
 
@@ -4300,8 +4896,11 @@ namespace Jvdp.LightDarkroomOverlay
             grid.MultiSelect = false;
             grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-            grid.ColumnHeadersHeight = 36;
-            grid.RowTemplate.Height = 36;
+            grid.ColumnHeadersHeightSizeMode =
+                DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            grid.AutoSizeRowsMode =
+                DataGridViewAutoSizeRowsMode.AllCells;
+            grid.RowTemplate.MinimumHeight = 36;
             grid.EnableHeadersVisualStyles = false;
             grid.ColumnHeadersDefaultCellStyle.BackColor = Border;
             grid.ColumnHeadersDefaultCellStyle.ForeColor = TextPrimary;
@@ -4480,9 +5079,18 @@ namespace Jvdp.LightDarkroomOverlay
                 AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             coverPreviewCard.Controls.Add(coverPreviewMessage);
 
+            BuildResponsiveCoverLayout(
+                coverModeCard, coverExplanation,
+                coverEditorCard, coverTitleCaption, coverMessageCaption,
+                coverPreviewCard, coverPreviewCaption);
             BuildResponsiveSettingsLayout(
                 title, stabilityCaption, previewCaption,
                 previewLightCaption, cancelButton);
+            CaptureTextFitFonts(this);
+            Resize += delegate
+            {
+                EnsureTextFitsWithinBounds();
+            };
 
             AcceptButton = saveButton;
             CancelButton = cancelButton;
@@ -4545,6 +5153,235 @@ namespace Jvdp.LightDarkroomOverlay
                 updateStatusTimer.Dispose();
             };
             RefreshUpdateStatus();
+            EnsureTextFitsWithinBounds();
+        }
+
+        private void CaptureTextFitFonts(Control root)
+        {
+            if (root == null)
+                return;
+            if ((root is Label || root is Button) &&
+                !textFitBaseFontSizes.ContainsKey(root))
+            {
+                textFitBaseFontSizes.Add(root, root.Font.Size);
+                root.TextChanged += delegate
+                {
+                    if (!textFitActive && !root.IsDisposed)
+                        OverlayForm.FitTextControl(root);
+                };
+                root.SizeChanged += delegate
+                {
+                    if (!textFitActive && !root.IsDisposed)
+                        OverlayForm.FitTextControl(root);
+                };
+            }
+            foreach (Control child in root.Controls)
+                CaptureTextFitFonts(child);
+        }
+
+        private void EnsureTextFitsWithinBounds()
+        {
+            if (textFitActive || IsDisposed)
+                return;
+            textFitActive = true;
+            try
+            {
+                RestoreTextFitFonts(this);
+                OverlayForm.FitTextTree(this);
+            }
+            finally
+            {
+                textFitActive = false;
+            }
+        }
+
+        private void RestoreTextFitFonts(Control root)
+        {
+            float baseSize;
+            if (textFitBaseFontSizes.TryGetValue(root, out baseSize) &&
+                Math.Abs(root.Font.Size - baseSize) > 0.05f)
+                OverlayForm.ReplaceControlFont(root, new Font(
+                    root.Font.FontFamily.Name,
+                    baseSize, root.Font.Style));
+            foreach (Control child in root.Controls)
+                RestoreTextFitFonts(child);
+        }
+
+        private void BuildResponsiveCoverLayout(
+            Panel coverModeCard,
+            Label coverExplanation,
+            Panel coverEditorCard,
+            Label coverTitleCaption,
+            Label coverMessageCaption,
+            Panel coverPreviewCard,
+            Label coverPreviewCaption)
+        {
+            coverSettingsPanel.SuspendLayout();
+            coverSettingsPanel.Controls.Clear();
+            coverSettingsPanel.AutoScroll = true;
+
+            TableLayoutPanel coverRoot = new TableLayoutPanel();
+            coverRoot.AutoSize = true;
+            coverRoot.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            coverRoot.Dock = DockStyle.Top;
+            coverRoot.BackColor = Background;
+            coverRoot.ColumnCount = 1;
+            coverRoot.RowCount = 3;
+            coverRoot.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            coverRoot.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            coverRoot.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            coverRoot.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            coverModeCard.Controls.Clear();
+            coverModeCard.AutoSize = true;
+            coverModeCard.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            coverModeCard.Dock = DockStyle.Fill;
+            coverModeCard.Margin = new Padding(0, 0, 0, 12);
+            TableLayoutPanel modeLayout = new TableLayoutPanel();
+            modeLayout.AutoSize = true;
+            modeLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            modeLayout.Dock = DockStyle.Fill;
+            modeLayout.Padding = new Padding(16, 8, 16, 10);
+            modeLayout.ColumnCount = 1;
+            modeLayout.RowCount = 2;
+            modeLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            modeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            modeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            FlowLayoutPanel coverModes = new FlowLayoutPanel();
+            coverModes.AutoSize = true;
+            coverModes.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            coverModes.Dock = DockStyle.Fill;
+            coverModes.FlowDirection = FlowDirection.LeftToRight;
+            coverModes.WrapContents = true;
+            coverModes.Margin = Padding.Empty;
+            defaultCoverText.AutoSize = true;
+            defaultCoverText.Margin = new Padding(0, 2, 42, 4);
+            customCoverText.AutoSize = true;
+            customCoverText.Margin = new Padding(0, 2, 0, 4);
+            coverModes.Controls.Add(defaultCoverText);
+            coverModes.Controls.Add(customCoverText);
+
+            coverExplanation.AutoSize = true;
+            coverExplanation.AutoEllipsis = false;
+            coverExplanation.MaximumSize = new Size(900, 0);
+            coverExplanation.Margin = Padding.Empty;
+            modeLayout.Controls.Add(coverModes, 0, 0);
+            modeLayout.Controls.Add(coverExplanation, 0, 1);
+            coverModeCard.Controls.Add(modeLayout);
+
+            coverEditorCard.Controls.Clear();
+            coverEditorCard.AutoSize = true;
+            coverEditorCard.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            coverEditorCard.Dock = DockStyle.Fill;
+            coverEditorCard.Margin = new Padding(0, 0, 0, 12);
+            TableLayoutPanel editorLayout = new TableLayoutPanel();
+            editorLayout.AutoSize = true;
+            editorLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            editorLayout.Dock = DockStyle.Fill;
+            editorLayout.Padding = new Padding(16, 10, 16, 12);
+            editorLayout.ColumnCount = 2;
+            editorLayout.RowCount = 2;
+            editorLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.AutoSize));
+            editorLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            editorLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            editorLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            coverTitleCaption.AutoSize = true;
+            coverTitleCaption.Margin = new Padding(0, 7, 18, 12);
+            coverTitleInput.Dock = DockStyle.Fill;
+            coverTitleInput.MinimumSize = new Size(
+                240, coverTitleInput.PreferredHeight);
+            coverTitleInput.Margin = new Padding(0, 0, 0, 12);
+            coverMessageCaption.AutoSize = true;
+            coverMessageCaption.Margin = new Padding(0, 7, 18, 0);
+            coverMessageInput.Dock = DockStyle.Fill;
+            coverMessageInput.MinimumSize = new Size(240, 100);
+            coverMessageInput.Margin = Padding.Empty;
+            editorLayout.Controls.Add(coverTitleCaption, 0, 0);
+            editorLayout.Controls.Add(coverTitleInput, 1, 0);
+            editorLayout.Controls.Add(coverMessageCaption, 0, 1);
+            editorLayout.Controls.Add(coverMessageInput, 1, 1);
+            coverEditorCard.Controls.Add(editorLayout);
+
+            coverPreviewCard.Controls.Clear();
+            coverPreviewCard.AutoSize = true;
+            coverPreviewCard.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            coverPreviewCard.Dock = DockStyle.Fill;
+            coverPreviewCard.MinimumSize = new Size(0, 180);
+            coverPreviewCard.Margin = Padding.Empty;
+            TableLayoutPanel coverPreviewLayout = new TableLayoutPanel();
+            coverPreviewLayout.AutoSize = true;
+            coverPreviewLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            coverPreviewLayout.Dock = DockStyle.Fill;
+            coverPreviewLayout.Padding = new Padding(14, 8, 14, 14);
+            coverPreviewLayout.ColumnCount = 1;
+            coverPreviewLayout.RowCount = 3;
+            coverPreviewLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            coverPreviewLayout.RowStyles.Add(
+                new RowStyle(SizeType.AutoSize));
+            coverPreviewLayout.RowStyles.Add(
+                new RowStyle(SizeType.AutoSize));
+            coverPreviewLayout.RowStyles.Add(
+                new RowStyle(SizeType.AutoSize));
+
+            coverPreviewCaption.AutoSize = true;
+            coverPreviewCaption.Margin = new Padding(0, 0, 0, 12);
+            coverPreviewTitle.AutoSize = true;
+            coverPreviewTitle.AutoEllipsis = false;
+            coverPreviewTitle.MaximumSize = new Size(900, 0);
+            coverPreviewTitle.Dock = DockStyle.Fill;
+            coverPreviewTitle.TextAlign = ContentAlignment.MiddleCenter;
+            coverPreviewTitle.Margin = new Padding(8, 0, 8, 8);
+            coverPreviewMessage.AutoSize = true;
+            coverPreviewMessage.AutoEllipsis = false;
+            coverPreviewMessage.MaximumSize = new Size(900, 0);
+            coverPreviewMessage.Dock = DockStyle.Fill;
+            coverPreviewMessage.TextAlign = ContentAlignment.TopCenter;
+            coverPreviewMessage.Margin = new Padding(8, 0, 8, 0);
+            coverPreviewLayout.Controls.Add(coverPreviewCaption, 0, 0);
+            coverPreviewLayout.Controls.Add(coverPreviewTitle, 0, 1);
+            coverPreviewLayout.Controls.Add(coverPreviewMessage, 0, 2);
+            coverPreviewCard.Controls.Add(coverPreviewLayout);
+
+            coverRoot.Controls.Add(coverModeCard, 0, 0);
+            coverRoot.Controls.Add(coverEditorCard, 0, 1);
+            coverRoot.Controls.Add(coverPreviewCard, 0, 2);
+            coverSettingsPanel.Controls.Add(coverRoot);
+
+            bool updatingCoverExtent = false;
+            EventHandler updateCoverExtent = delegate
+            {
+                if (updatingCoverExtent || coverRoot.IsDisposed)
+                    return;
+                updatingCoverExtent = true;
+                try
+                {
+                    int textWidth = Math.Max(240,
+                        coverRoot.ClientSize.Width - 64);
+                    coverExplanation.MaximumSize =
+                        new Size(textWidth, 0);
+                    coverPreviewTitle.MaximumSize =
+                        new Size(textWidth, 0);
+                    coverPreviewMessage.MaximumSize =
+                        new Size(textWidth, 0);
+                    coverSettingsPanel.AutoScrollMinSize = new Size(
+                        0, Math.Max(1, coverRoot.PreferredSize.Height + 12));
+                }
+                finally
+                {
+                    updatingCoverExtent = false;
+                }
+            };
+            coverRoot.SizeChanged += updateCoverExtent;
+            coverSettingsPanel.SizeChanged += updateCoverExtent;
+            updateCoverExtent(this, EventArgs.Empty);
+            coverSettingsPanel.ResumeLayout(true);
         }
 
         private void BuildResponsiveSettingsLayout(
@@ -4558,6 +5395,7 @@ namespace Jvdp.LightDarkroomOverlay
 
             TableLayoutPanel root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
+            root.AutoScroll = true;
             root.BackColor = Background;
             root.Padding = new Padding(24, 8, 24, 12);
             root.ColumnCount = 1;
@@ -4579,7 +5417,7 @@ namespace Jvdp.LightDarkroomOverlay
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             FlowLayoutPanel navigation = new FlowLayoutPanel();
             navigation.AutoSize = true;
@@ -4591,9 +5429,15 @@ namespace Jvdp.LightDarkroomOverlay
 
             title.AutoSize = true;
             title.Margin = new Padding(0, 5, 16, 4);
-            isoSettingsTab.Size = new Size(118, 42);
+            isoSettingsTab.AutoSize = true;
+            isoSettingsTab.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            isoSettingsTab.MinimumSize = new Size(118, 42);
+            isoSettingsTab.Padding = new Padding(12, 0, 12, 0);
             isoSettingsTab.Margin = new Padding(0, 0, 8, 4);
-            coverSettingsTab.Size = new Size(156, 42);
+            coverSettingsTab.AutoSize = true;
+            coverSettingsTab.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            coverSettingsTab.MinimumSize = new Size(156, 42);
+            coverSettingsTab.Padding = new Padding(12, 0, 12, 0);
             coverSettingsTab.Margin = new Padding(0, 0, 0, 4);
             navigation.Controls.Add(title);
             navigation.Controls.Add(isoSettingsTab);
@@ -4605,10 +5449,13 @@ namespace Jvdp.LightDarkroomOverlay
             updateButton.Padding = new Padding(12, 0, 12, 0);
             updateButton.Margin = new Padding(16, 0, 0, 4);
 
-            boothAndVersionLabel.AutoEllipsis = true;
-            boothAndVersionLabel.Dock = DockStyle.Fill;
+            boothAndVersionLabel.AutoEllipsis = false;
+            boothAndVersionLabel.AutoSize = true;
+            boothAndVersionLabel.MaximumSize = new Size(900, 0);
+            boothAndVersionLabel.Anchor = AnchorStyles.Top |
+                AnchorStyles.Right;
             boothAndVersionLabel.Margin = Padding.Empty;
-            boothAndVersionLabel.TextAlign = ContentAlignment.MiddleRight;
+            boothAndVersionLabel.TextAlign = ContentAlignment.TopRight;
 
             header.Controls.Add(navigation, 0, 0);
             header.Controls.Add(updateButton, 1, 0);
@@ -4633,7 +5480,7 @@ namespace Jvdp.LightDarkroomOverlay
             profileLayout.ColumnStyles.Add(
                 new ColumnStyle(SizeType.AutoSize));
             profileLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            profileLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+            profileLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             FlowLayoutPanel profileModes = new FlowLayoutPanel();
             profileModes.AutoSize = true;
@@ -4651,8 +5498,11 @@ namespace Jvdp.LightDarkroomOverlay
             profileLayout.Controls.Add(profileModes, 0, 0);
             profileLayout.SetColumnSpan(profileModes, 2);
 
-            explanation.Dock = DockStyle.Fill;
-            explanation.AutoEllipsis = true;
+            explanation.AutoSize = true;
+            explanation.AutoEllipsis = false;
+            explanation.MaximumSize = new Size(700, 0);
+            explanation.Anchor = AnchorStyles.Left |
+                AnchorStyles.Top | AnchorStyles.Right;
             explanation.Margin = new Padding(0, 0, 16, 0);
             profileLayout.Controls.Add(explanation, 0, 1);
 
@@ -4665,7 +5515,10 @@ namespace Jvdp.LightDarkroomOverlay
             stability.Margin = Padding.Empty;
             stabilityCaption.AutoSize = true;
             stabilityCaption.Margin = new Padding(0, 8, 10, 0);
-            stabilitySecondsInput.Size = new Size(68, 28);
+            stabilitySecondsInput.AutoSize = true;
+            stabilitySecondsInput.MinimumSize = new Size(68, 0);
+            stabilitySecondsInput.Height =
+                stabilitySecondsInput.PreferredHeight;
             stabilitySecondsInput.Margin = new Padding(0, 4, 0, 0);
             stability.Controls.Add(stabilityCaption);
             stability.Controls.Add(stabilitySecondsInput);
@@ -4690,19 +5543,24 @@ namespace Jvdp.LightDarkroomOverlay
             previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             previewLayout.ColumnStyles.Add(
                 new ColumnStyle(SizeType.Percent, 100));
-            previewLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            previewLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+            previewLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            previewLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             previewCaption.AutoSize = true;
             previewCaption.Margin = new Padding(0, 6, 28, 0);
             previewLightCaption.AutoSize = true;
             previewLightCaption.Margin = new Padding(0, 7, 8, 0);
-            previewLightInput.Size = new Size(70, 28);
+            previewLightInput.AutoSize = true;
+            previewLightInput.MinimumSize = new Size(70, 0);
+            previewLightInput.Height = previewLightInput.PreferredHeight;
             previewLightInput.Margin = new Padding(0, 3, 18, 0);
-            previewText.Dock = DockStyle.Fill;
-            previewText.AutoEllipsis = true;
+            previewText.AutoSize = true;
+            previewText.AutoEllipsis = false;
+            previewText.Anchor = AnchorStyles.Top |
+                AnchorStyles.Right;
             previewText.Margin = Padding.Empty;
             previewRange.Dock = DockStyle.Fill;
+            previewRange.MinimumSize = new Size(0, 100);
             previewRange.Margin = Padding.Empty;
             previewLayout.Controls.Add(previewCaption, 0, 0);
             previewLayout.Controls.Add(previewLightCaption, 1, 0);
@@ -4721,10 +5579,11 @@ namespace Jvdp.LightDarkroomOverlay
             footer.Dock = DockStyle.Fill;
             footer.Margin = Padding.Empty;
             footer.ColumnCount = 3;
-            footer.RowCount = 1;
+            footer.RowCount = 2;
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             FlowLayoutPanel rangeActions = new FlowLayoutPanel();
@@ -4763,8 +5622,51 @@ namespace Jvdp.LightDarkroomOverlay
 
             footer.Controls.Add(rangeActions, 0, 0);
             footer.Controls.Add(saveActions, 2, 0);
+            rangeActions.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            saveActions.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            bool layingOutFooter = false;
+            EventHandler layoutFooter = delegate
+            {
+                if (layingOutFooter || footer.IsDisposed)
+                    return;
+                layingOutFooter = true;
+                try
+                {
+                    int requiredWidth =
+                        rangeActions.PreferredSize.Width +
+                        saveActions.PreferredSize.Width + 24;
+                    bool stack = footer.ClientSize.Width < requiredWidth;
+                    if (stack)
+                    {
+                        footer.SetCellPosition(
+                            rangeActions, new TableLayoutPanelCellPosition(0, 0));
+                        footer.SetColumnSpan(rangeActions, 3);
+                        footer.SetCellPosition(
+                            saveActions, new TableLayoutPanelCellPosition(0, 1));
+                        footer.SetColumnSpan(saveActions, 3);
+                    }
+                    else
+                    {
+                        footer.SetCellPosition(
+                            rangeActions, new TableLayoutPanelCellPosition(0, 0));
+                        footer.SetColumnSpan(rangeActions, 1);
+                        footer.SetCellPosition(
+                            saveActions, new TableLayoutPanelCellPosition(2, 0));
+                        footer.SetColumnSpan(saveActions, 1);
+                    }
+                }
+                finally
+                {
+                    layingOutFooter = false;
+                }
+            };
+            footer.SizeChanged += layoutFooter;
+            rangeActions.SizeChanged += layoutFooter;
+            saveActions.SizeChanged += layoutFooter;
+            layoutFooter(this, EventArgs.Empty);
 
             coverSettingsPanel.Dock = DockStyle.Fill;
+            coverSettingsPanel.AutoScroll = true;
             coverSettingsPanel.Margin = new Padding(0, 0, 0, 10);
 
             Controls.Clear();
@@ -5400,7 +6302,9 @@ namespace Jvdp.LightDarkroomOverlay
             SizeF available, StringFormat format)
         {
             string value = String.IsNullOrEmpty(text) ? " " : text;
-            for (float size = maximumSize; size >= minimumSize; size -= 1f)
+            const float absoluteMinimumSize = 5f;
+            for (float size = maximumSize;
+                size >= absoluteMinimumSize; size -= 1f)
             {
                 Font candidate = new Font(family, size, style);
                 SizeF measured = graphics.MeasureString(
@@ -5411,7 +6315,8 @@ namespace Jvdp.LightDarkroomOverlay
                     return candidate;
                 candidate.Dispose();
             }
-            return new Font(family, minimumSize, style);
+            return new Font(family,
+                Math.Min(minimumSize, absoluteMinimumSize), style);
         }
     }
     internal sealed class ComboItem
