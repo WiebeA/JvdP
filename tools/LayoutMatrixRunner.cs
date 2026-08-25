@@ -19,6 +19,10 @@ namespace Jvdp.LayoutTests
 
         private static Rectangle matrixWorkingArea;
         private static int matrixScreenDpi = 96;
+        private static bool headlessMode;
+        private static readonly MethodInfo ControlGetStateMethod =
+            typeof(Control).GetMethod("GetState",
+                BindingFlags.Instance | BindingFlags.NonPublic);
 
         private static readonly Size[] Sizes = {
             new Size(1000, 720),
@@ -57,9 +61,18 @@ namespace Jvdp.LayoutTests
             Program.EnablePerMonitorDpiAwareness();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            headlessMode = Array.Exists(args, delegate(string value)
+            {
+                return String.Equals(value, "--headless",
+                    StringComparison.OrdinalIgnoreCase);
+            });
             SelectHighestDpiScreen();
-            string outputDirectory = args.Length > 0
-                ? Path.GetFullPath(args[0])
+            string outputArgument = Array.Find(args, delegate(string value)
+            {
+                return !value.StartsWith("--", StringComparison.Ordinal);
+            });
+            string outputDirectory = !String.IsNullOrWhiteSpace(outputArgument)
+                ? Path.GetFullPath(outputArgument)
                 : Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
                     "layout-matrix");
             Directory.CreateDirectory(outputDirectory);
@@ -87,8 +100,9 @@ namespace Jvdp.LayoutTests
                 stateImages["volledig-scherm"].Add(fullscreen.Path);
             }
 
-            foreach (KeyValuePair<string, List<string>> item in stateImages)
-                CreateContactSheet(outputDirectory, item.Key, item.Value);
+            if (!headlessMode)
+                foreach (KeyValuePair<string, List<string>> item in stateImages)
+                    CreateContactSheet(outputDirectory, item.Key, item.Value);
 
             CaptureResult manualCover = CaptureManualCover(outputDirectory);
             WriteReport(outputDirectory, results, manualCover);
@@ -119,11 +133,18 @@ namespace Jvdp.LayoutTests
                 form.StartPosition = FormStartPosition.Manual;
                 form.Location = matrixWorkingArea.Location;
                 form.ShowInTaskbar = false;
-                form.Opacity = 0.0;
-                form.Show();
                 form.MinimumSize = Size.Empty;
                 form.MaximumSize = Size.Empty;
                 form.ClientSize = requestedSize;
+                if (headlessMode)
+                {
+                    IntPtr handle = form.Handle;
+                }
+                else
+                {
+                    form.Opacity = 0.0;
+                    form.Show();
+                }
                 if (state == "technische-details")
                     form.PrepareDashboardForLayoutTest(true);
                 else if (state == "statusvlak")
@@ -151,7 +172,7 @@ namespace Jvdp.LayoutTests
                 ValidateControlTree(form, result.Issues);
                 ValidateRangeControls(form, result.Issues);
                 Control statusOverlay = null;
-                if (state == "statusvlak" &&
+                if (!headlessMode && state == "statusvlak" &&
                     !form.StatusPanelVisibleForLayoutTest)
                     result.Issues.Add(
                         "Het statuspaneel is niet zichtbaar in de statuscase.");
@@ -159,7 +180,8 @@ namespace Jvdp.LayoutTests
                 {
                     statusOverlay = FindControlByAccessibleName(
                         form, "Statuspaneel");
-                    if (statusOverlay == null || !statusOverlay.Visible)
+                    if (statusOverlay == null ||
+                        !IsVisibleForValidation(statusOverlay, form))
                         result.Issues.Add(
                             "Het statuspaneel ontbreekt in de control tree.");
                     else
@@ -180,13 +202,15 @@ namespace Jvdp.LayoutTests
                         "Terug naar dashboard") == null)
                     result.Issues.Add(
                         "Navigatieknop 'Terug naar dashboard' ontbreekt.");
-                SaveControlBitmap(form, result.Path, statusOverlay);
+                if (!headlessMode)
+                    SaveControlBitmap(form, result.Path, statusOverlay);
                 if (state == "licht-en-iso" &&
                     !form.VerifyStaleUpdateRecoveryForLayoutTest())
                     result.Issues.Add(
                         "Een vastgelopen bestaande updatestatus wordt niet opnieuw probeerbaar.");
                 form.Close();
-                Application.DoEvents();
+                if (!headlessMode)
+                    Application.DoEvents();
             }
             return result;
         }
@@ -210,18 +234,27 @@ namespace Jvdp.LayoutTests
                 form.StartPosition = FormStartPosition.Manual;
                 form.Location = matrixWorkingArea.Location;
                 form.TopMost = false;
-                form.Opacity = 0.0;
-                form.Show();
                 form.ClientSize = requestedSize;
+                if (headlessMode)
+                {
+                    IntPtr handle = form.Handle;
+                }
+                else
+                {
+                    form.Opacity = 0.0;
+                    form.Show();
+                }
                 Stabilize(form);
                 result.ActualSize = form.ClientSize;
                 result.Dpi = GetEffectiveDpi(form);
                 ValidateCapturedDpi(result);
                 ValidateFullscreenText(
                     result.ActualSize, title, message, result.Issues);
-                SaveControlBitmap(form, result.Path);
+                if (!headlessMode)
+                    SaveControlBitmap(form, result.Path);
                 form.Close();
-                Application.DoEvents();
+                if (!headlessMode)
+                    Application.DoEvents();
             }
             return result;
         }
@@ -243,8 +276,15 @@ namespace Jvdp.LayoutTests
                 form.StartPosition = FormStartPosition.Manual;
                 form.Location = matrixWorkingArea.Location;
                 form.TopMost = false;
-                form.Opacity = 0.0;
-                form.Show();
+                if (headlessMode)
+                {
+                    IntPtr handle = form.Handle;
+                }
+                else
+                {
+                    form.Opacity = 0.0;
+                    form.Show();
+                }
                 Stabilize(form);
                 result.ActualSize = form.ClientSize;
                 result.Dpi = GetEffectiveDpi(form);
@@ -254,9 +294,11 @@ namespace Jvdp.LayoutTests
                         form, "VOLLEDIG SCHERM VERBERGEN") == null)
                     result.Issues.Add(
                         "De knop om het volledige scherm te verbergen ontbreekt.");
-                SaveControlBitmap(form, result.Path);
+                if (!headlessMode)
+                    SaveControlBitmap(form, result.Path);
                 form.Close();
-                Application.DoEvents();
+                if (!headlessMode)
+                    Application.DoEvents();
             }
             return result;
         }
@@ -267,9 +309,11 @@ namespace Jvdp.LayoutTests
             {
                 root.PerformLayout();
                 OverlayForm.FitTextTree(root);
-                root.Refresh();
+                if (!headlessMode)
+                    root.Refresh();
                 Application.DoEvents();
-                Thread.Sleep(20);
+                if (!headlessMode)
+                    Thread.Sleep(20);
             }
         }
 
@@ -321,7 +365,7 @@ namespace Jvdp.LayoutTests
                 List<Control> visibleChildren = new List<Control>();
                 foreach (Control child in parent.Controls)
                 {
-                    if (child.Visible)
+                    if (IsVisibleForValidation(child, root))
                     {
                         visibleChildren.Add(child);
                         queue.Enqueue(child);
@@ -487,7 +531,8 @@ namespace Jvdp.LayoutTests
             foreach (Control control in EnumerateControls(root))
             {
                 LightRangeControl range = control as LightRangeControl;
-                if (range == null || !range.Visible)
+                if (range == null ||
+                    !IsVisibleForValidation(range, root))
                     continue;
                 FieldInfo bandsField = typeof(LightRangeControl).GetField(
                     "bands", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -541,7 +586,7 @@ namespace Jvdp.LayoutTests
         private static Control FindControlByText(Control root, string text)
         {
             foreach (Control control in EnumerateControls(root))
-                if (control.Visible && String.Equals(
+                if (IsVisibleForValidation(control, root) && String.Equals(
                     control.Text, text, StringComparison.Ordinal))
                     return control;
             return null;
@@ -555,6 +600,36 @@ namespace Jvdp.LayoutTests
                         StringComparison.Ordinal))
                     return control;
             return null;
+        }
+
+        private static bool IsVisibleForValidation(
+            Control control, Control root)
+        {
+            if (!headlessMode)
+                return control.Visible;
+            Control current = control;
+            while (current != null && current != root)
+            {
+                if (!HasOwnVisibleFlag(current))
+                    return false;
+                current = current.Parent;
+            }
+            return current == root;
+        }
+
+        private static bool HasOwnVisibleFlag(Control control)
+        {
+            if (ControlGetStateMethod == null)
+                return true;
+            try
+            {
+                return (bool)ControlGetStateMethod.Invoke(
+                    control, new object[] { 0x00000002 });
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         private static void ValidateFullscreenText(
@@ -603,6 +678,16 @@ namespace Jvdp.LayoutTests
 
         private static void SelectHighestDpiScreen()
         {
+            if (headlessMode)
+            {
+                Screen primary = Screen.PrimaryScreen;
+                matrixWorkingArea = primary.WorkingArea;
+                matrixScreenDpi = 96;
+                Console.WriteLine(
+                    "Layout matrix display: {0}, work={1}, dpi={2}, headless=true",
+                    primary.DeviceName, matrixWorkingArea, matrixScreenDpi);
+                return;
+            }
             Screen selected = Screen.PrimaryScreen;
             int selectedDpi = 96;
             foreach (Screen screen in Screen.AllScreens)

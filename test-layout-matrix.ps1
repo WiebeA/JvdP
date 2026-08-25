@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Headless
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,7 +60,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Layout matrix runner compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $projectRoot `
     'pc-overlay\JvdpLightDarkroomOverlay.exe.config') `
     -Destination ($runner + '.config') -Force
-& $runner $OutputDirectory
+$runnerArguments = @($OutputDirectory)
+if ($Headless -or $env:GITHUB_ACTIONS -eq 'true') {
+    $runnerArguments += '--headless'
+}
+& $runner @runnerArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Layout matrix found problems. See $OutputDirectory"
 }
