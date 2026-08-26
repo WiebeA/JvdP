@@ -128,11 +128,11 @@ namespace Jvdp.LayoutTests
                 requestedSize.Width, requestedSize.Height, state);
             result.Path = Path.Combine(outputDirectory, fileName);
 
-            using (OverlayForm form = new OverlayForm(false, true))
+            using (OverlayForm form = new OverlayForm(
+                false, true, headlessMode))
             {
                 form.StartPosition = FormStartPosition.Manual;
                 form.Location = matrixWorkingArea.Location;
-                form.ShowInTaskbar = false;
                 form.MinimumSize = Size.Empty;
                 form.MaximumSize = Size.Empty;
                 form.ClientSize = requestedSize;
@@ -144,6 +144,13 @@ namespace Jvdp.LayoutTests
                 {
                     form.Opacity = 0.0;
                     form.Show();
+                    // Match the real application (a normal taskbar window)
+                    // and reapply the target after HWND creation. Windows can
+                    // otherwise initially associate a hidden test window with
+                    // the primary display and keep it at that display's DPI.
+                    form.Location = matrixWorkingArea.Location;
+                    form.ClientSize = requestedSize;
+                    Application.DoEvents();
                 }
                 if (state == "technische-details")
                     form.PrepareDashboardForLayoutTest(true);
@@ -166,6 +173,9 @@ namespace Jvdp.LayoutTests
                 if (state == "statusvlak")
                     form.ShowStatusForLayoutTest();
                 Stabilize(form);
+                if (headlessMode && form.Visible)
+                    result.Issues.Add(
+                        "Headless matrix heeft onverwacht een hoofdvenster getoond.");
                 result.ActualSize = form.ClientSize;
                 result.Dpi = GetEffectiveDpi(form);
                 ValidateCapturedDpi(result);
@@ -245,6 +255,9 @@ namespace Jvdp.LayoutTests
                     form.Show();
                 }
                 Stabilize(form);
+                if (headlessMode && form.Visible)
+                    result.Issues.Add(
+                        "Headless matrix heeft onverwacht een fullscreenvenster getoond.");
                 result.ActualSize = form.ClientSize;
                 result.Dpi = GetEffectiveDpi(form);
                 ValidateCapturedDpi(result);
@@ -286,6 +299,9 @@ namespace Jvdp.LayoutTests
                     form.Show();
                 }
                 Stabilize(form);
+                if (headlessMode && form.Visible)
+                    result.Issues.Add(
+                        "Headless matrix heeft onverwacht de verbergknop getoond.");
                 result.ActualSize = form.ClientSize;
                 result.Dpi = GetEffectiveDpi(form);
                 ValidateCapturedDpi(result);
@@ -308,13 +324,27 @@ namespace Jvdp.LayoutTests
             for (int pass = 0; pass < 4; pass++)
             {
                 root.PerformLayout();
-                OverlayForm.FitTextTree(root);
+                if (headlessMode)
+                    FitVisibleTextTreeForValidation(root, root);
+                else
+                    OverlayForm.FitTextTree(root);
                 if (!headlessMode)
                     root.Refresh();
                 Application.DoEvents();
                 if (!headlessMode)
                     Thread.Sleep(20);
             }
+        }
+
+        private static void FitVisibleTextTreeForValidation(
+            Control control, Control root)
+        {
+            if (control != root &&
+                IsVisibleForValidation(control, root) &&
+                (control is Label || control is Button))
+                OverlayForm.FitTextControl(control);
+            foreach (Control child in control.Controls)
+                FitVisibleTextTreeForValidation(child, root);
         }
 
         private static void ValidateCapturedDpi(CaptureResult result)
@@ -620,15 +650,19 @@ namespace Jvdp.LayoutTests
         private static bool HasOwnVisibleFlag(Control control)
         {
             if (ControlGetStateMethod == null)
-                return true;
+                throw new InvalidOperationException(
+                    "De interne WinForms-zichtbaarheidscontrole ontbreekt; " +
+                    "de headless layouttest kan daardoor niet betrouwbaar draaien.");
             try
             {
                 return (bool)ControlGetStateMethod.Invoke(
                     control, new object[] { 0x00000002 });
             }
-            catch
+            catch (Exception ex)
             {
-                return true;
+                throw new InvalidOperationException(
+                    "De interne WinForms-zichtbaarheidscontrole is mislukt; " +
+                    "de headless layouttest is afgebroken.", ex);
             }
         }
 

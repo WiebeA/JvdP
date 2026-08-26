@@ -573,6 +573,7 @@ namespace Jvdp.LightDarkroomOverlay
         private int coverRaiseActive;
         private readonly bool startInTray;
         private readonly bool layoutTestMode;
+        private readonly bool headlessLayoutTestMode;
         private bool exitRequested;
         private volatile bool shuttingDown;
         private readonly object mappingSync = new object();
@@ -614,8 +615,17 @@ namespace Jvdp.LightDarkroomOverlay
 
         internal OverlayForm(
             bool startMinimizedToTray, bool enableLayoutTestMode)
+            : this(startMinimizedToTray, enableLayoutTestMode, false)
+        {
+        }
+
+        internal OverlayForm(
+            bool startMinimizedToTray, bool enableLayoutTestMode,
+            bool enableHeadlessLayoutTestMode)
         {
             layoutTestMode = enableLayoutTestMode;
+            headlessLayoutTestMode = enableLayoutTestMode &&
+                enableHeadlessLayoutTestMode;
             Text = "JvdP Lichtregeling";
             Icon applicationIcon = Icon.ExtractAssociatedIcon(
                 Application.ExecutablePath);
@@ -2000,7 +2010,7 @@ namespace Jvdp.LightDarkroomOverlay
             if (layoutTestMode)
             {
                 ShowInTaskbar = false;
-                if (!Visible)
+                if (!Visible && !headlessLayoutTestMode)
                     Show();
                 return;
             }
