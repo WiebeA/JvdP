@@ -5402,6 +5402,107 @@ namespace Jvdp.LightDarkroomOverlay
     }
 
 
+    internal sealed class TouchNumberInput : UserControl
+    {
+        private readonly TextBox input;
+
+        internal event EventHandler ValueTextChanged;
+        internal event EventHandler InputLeave;
+
+        internal string ValueText
+        {
+            get { return input.Text; }
+            set
+            {
+                string next = value ?? "";
+                if (input.Text != next)
+                    input.Text = next;
+            }
+        }
+
+        internal bool InputReadOnly
+        {
+            get { return input.ReadOnly; }
+            set
+            {
+                input.ReadOnly = value;
+                BackColor = value
+                    ? Color.FromArgb(247, 248, 250)
+                    : Color.White;
+                input.BackColor = BackColor;
+            }
+        }
+
+        internal TouchNumberInput()
+        {
+            AutoScaleDimensions = new SizeF(96f, 96f);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            BackColor = Color.White;
+            BorderStyle = BorderStyle.FixedSingle;
+            MinimumSize = new Size(112, 68);
+            Size = new Size(112, 68);
+            Padding = new Padding(14, 8, 14, 8);
+            TabStop = true;
+
+            input = new TextBox();
+            input.BorderStyle = BorderStyle.None;
+            input.Font = new Font("Segoe UI", 18, FontStyle.Bold);
+            input.TextAlign = HorizontalAlignment.Center;
+            input.BackColor = BackColor;
+            input.ShortcutsEnabled = true;
+            input.KeyPress += delegate(object sender, KeyPressEventArgs key)
+            {
+                if (!Char.IsControl(key.KeyChar) &&
+                    !Char.IsDigit(key.KeyChar))
+                    key.Handled = true;
+            };
+            input.Enter += delegate { input.SelectAll(); };
+            input.TextChanged += delegate
+            {
+                EventHandler handler = ValueTextChanged;
+                if (handler != null)
+                    handler(this, EventArgs.Empty);
+            };
+            input.Leave += delegate
+            {
+                EventHandler handler = InputLeave;
+                if (handler != null)
+                    handler(this, EventArgs.Empty);
+            };
+            Controls.Add(input);
+
+            Click += delegate { FocusInput(); };
+            MouseDown += delegate { FocusInput(); };
+        }
+
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            base.OnLayout(e);
+            if (input == null)
+                return;
+            int preferredHeight = input.PreferredHeight;
+            int top = Math.Max(Padding.Top,
+                (ClientSize.Height - preferredHeight) / 2);
+            input.SetBounds(
+                Padding.Left,
+                top,
+                Math.Max(1, ClientSize.Width - Padding.Horizontal),
+                preferredHeight);
+        }
+
+        internal void SelectAllText()
+        {
+            input.Focus();
+            input.SelectAll();
+        }
+
+        private void FocusInput()
+        {
+            if (!input.ReadOnly)
+                SelectAllText();
+        }
+    }
+
     internal sealed class IsoMappingForm : Form
     {
         private static readonly Color Background = Color.FromArgb(247, 248, 250);
@@ -6781,12 +6882,12 @@ namespace Jvdp.LightDarkroomOverlay
                     as TableLayoutPanel;
             if (firstRow == null)
                 return false;
-            TextBox maximumInput = null;
+            TouchNumberInput maximumInput = null;
             ComboBox isoInput = null;
             foreach (Control control in firstRow.Controls)
             {
                 if (maximumInput == null)
-                    maximumInput = control as TextBox;
+                    maximumInput = control as TouchNumberInput;
                 if (isoInput == null)
                     isoInput = control as ComboBox;
             }
@@ -6796,13 +6897,14 @@ namespace Jvdp.LightDarkroomOverlay
 
             int originalMaximum = CustomBands[0].MaximumLight;
             int originalIso = CustomBands[0].Iso;
-            maximumInput.Text = (originalMaximum + 1).ToString();
+            maximumInput.ValueText =
+                (originalMaximum + 1).ToString();
             bool maximumChanged =
                 CustomBands[0].MaximumLight == originalMaximum + 1 &&
                 Convert.ToInt32(grid.Rows[1].Cells[0].Value) ==
                     originalMaximum + 2;
 
-            maximumInput.Text = originalMaximum.ToString();
+            maximumInput.ValueText = originalMaximum.ToString();
             int alternativeIndex = isoInput.SelectedIndex == 0 ? 1 : 0;
             isoInput.SelectedIndex = alternativeIndex;
             bool isoChanged = CustomBands[0].Iso ==
@@ -7137,11 +7239,11 @@ namespace Jvdp.LightDarkroomOverlay
                     row.ColumnStyles.Add(
                         new ColumnStyle(SizeType.AutoSize));
                     row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
                         new ColumnStyle(SizeType.Percent, 100));
-                    row.ColumnStyles.Add(
-                        new ColumnStyle(SizeType.AutoSize));
-                    row.ColumnStyles.Add(
-                        new ColumnStyle(SizeType.AutoSize));
                     row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                     row.AccessibleName = "Lichtbereik " + (index + 1);
 
@@ -7149,32 +7251,49 @@ namespace Jvdp.LightDarkroomOverlay
                         lower + "–" + band.MaximumLight,
                         13, FontStyle.Bold, TextPrimary);
                     rangeLabel.AutoSize = true;
-                    rangeLabel.MinimumSize = new Size(90, 54);
+                    rangeLabel.MinimumSize = new Size(112, 68);
                     rangeLabel.TextAlign = ContentAlignment.MiddleLeft;
-                    rangeLabel.Margin = new Padding(0, 0, 12, 0);
+                    rangeLabel.Margin = new Padding(0, 0, 16, 0);
                     rangeLabel.AccessibleName =
                         "Grenzen van lichtbereik " + (index + 1);
+                    touchRangeLabels.Add(rangeLabel);
+
+                    if (!custom)
+                    {
+                        Label fixedIso = MakeDialogLabel(
+                            "ISO " + band.Iso,
+                            13, FontStyle.Bold, Accent);
+                        fixedIso.AutoSize = true;
+                        fixedIso.MinimumSize = new Size(160, 68);
+                        fixedIso.TextAlign = ContentAlignment.MiddleLeft;
+                        fixedIso.Margin = Padding.Empty;
+                        fixedIso.AccessibleName =
+                            "Vaste Darkroom ISO voor lichtbereik " +
+                            (index + 1);
+                        row.Controls.Add(rangeLabel, 0, 0);
+                        row.Controls.Add(fixedIso, 1, 0);
+                        row.Controls.Add(new Panel(), 7, 0);
+                        bandRowsHost.Controls.Add(row, 0, index + 1);
+                        bandRowsHost.RowStyles.Add(
+                            new RowStyle(SizeType.AutoSize));
+                        lower = band.MaximumLight + 1;
+                        continue;
+                    }
 
                     Button decrease = MakeTouchStepButton(
                         "−", "Eindwaarde van bereik " +
                         (index + 1) + " één lager");
                     decrease.Enabled = custom && index < source.Count - 1;
 
-                    TextBox maximumInput = new TextBox();
-                    maximumInput.Text = band.MaximumLight.ToString();
-                    maximumInput.Font = new Font(
-                        "Segoe UI", 16, FontStyle.Bold);
-                    maximumInput.TextAlign = HorizontalAlignment.Center;
-                    maximumInput.Multiline = true;
-                    maximumInput.MinimumSize = new Size(94, 54);
-                    maximumInput.Size = new Size(94, 54);
-                    maximumInput.Height = 54;
-                    maximumInput.Margin = new Padding(8, 0, 8, 0);
-                    maximumInput.ReadOnly = !custom ||
+                    TouchNumberInput maximumInput =
+                        new TouchNumberInput();
+                    maximumInput.ValueText =
+                        band.MaximumLight.ToString();
+                    maximumInput.Margin = new Padding(10, 0, 10, 0);
+                    maximumInput.InputReadOnly =
                         index == source.Count - 1;
                     maximumInput.AccessibleName =
                         "Eindwaarde van lichtbereik " + (index + 1);
-                    touchRangeLabels.Add(rangeLabel);
 
                     Button increase = MakeTouchStepButton(
                         "+", "Eindwaarde van bereik " +
@@ -7184,9 +7303,9 @@ namespace Jvdp.LightDarkroomOverlay
                     Label isoCaption = MakeDialogLabel(
                         "wordt ISO", 10.5f, FontStyle.Regular, TextMuted);
                     isoCaption.AutoSize = true;
-                    isoCaption.MinimumSize = new Size(82, 54);
+                    isoCaption.MinimumSize = new Size(94, 68);
                     isoCaption.TextAlign = ContentAlignment.MiddleRight;
-                    isoCaption.Margin = new Padding(14, 0, 12, 0);
+                    isoCaption.Margin = new Padding(18, 0, 12, 0);
 
                     ComboBox isoInput = new ComboBox();
                     isoInput.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -7195,9 +7314,9 @@ namespace Jvdp.LightDarkroomOverlay
                     isoInput.IntegralHeight = false;
                     isoInput.DropDownHeight = 300;
                     isoInput.DrawMode = DrawMode.OwnerDrawFixed;
-                    isoInput.ItemHeight = 44;
-                    isoInput.MinimumSize = new Size(142, 54);
-                    isoInput.Width = 142;
+                    isoInput.ItemHeight = 52;
+                    isoInput.MinimumSize = new Size(170, 64);
+                    isoInput.Width = 170;
                     isoInput.Margin = Padding.Empty;
                     isoInput.Enabled = custom;
                     isoInput.AccessibleName =
@@ -7228,7 +7347,7 @@ namespace Jvdp.LightDarkroomOverlay
                     Button delete = MakeDialogButton(
                         "Verwijder", false);
                     delete.AutoSize = true;
-                    delete.MinimumSize = new Size(116, 54);
+                    delete.MinimumSize = new Size(136, 68);
                     delete.Font = new Font(
                         "Segoe UI", 10.5f, FontStyle.Bold);
                     delete.Margin = new Padding(12, 0, 0, 0);
@@ -7240,45 +7359,39 @@ namespace Jvdp.LightDarkroomOverlay
                     decrease.Click += delegate
                     {
                         int value;
-                        if (!Int32.TryParse(maximumInput.Text, out value))
+                        if (!Int32.TryParse(
+                                maximumInput.ValueText, out value))
                             value = CustomBands[rowIndex].MaximumLight;
                         int minimum = rowIndex == 0 ? 0 :
                             CustomBands[rowIndex - 1].MaximumLight + 1;
                         if (value > minimum)
-                            maximumInput.Text = (value - 1).ToString();
+                            maximumInput.ValueText =
+                                (value - 1).ToString();
                     };
                     increase.Click += delegate
                     {
                         int value;
-                        if (!Int32.TryParse(maximumInput.Text, out value))
+                        if (!Int32.TryParse(
+                                maximumInput.ValueText, out value))
                             value = CustomBands[rowIndex].MaximumLight;
                         int maximum = rowIndex < CustomBands.Count - 1
                             ? CustomBands[rowIndex + 1].MaximumLight - 1
                             : 100;
                         if (value < maximum)
-                            maximumInput.Text = (value + 1).ToString();
+                            maximumInput.ValueText =
+                                (value + 1).ToString();
                     };
-                    maximumInput.KeyPress += delegate(object sender,
-                        KeyPressEventArgs key)
-                    {
-                        if (!Char.IsControl(key.KeyChar) &&
-                            !Char.IsDigit(key.KeyChar))
-                            key.Handled = true;
-                    };
-                    maximumInput.Enter += delegate
-                    {
-                        maximumInput.SelectAll();
-                    };
-                    maximumInput.TextChanged += delegate
+                    maximumInput.ValueTextChanged += delegate
                     {
                         int parsed;
-                        if (Int32.TryParse(maximumInput.Text, out parsed))
+                        if (Int32.TryParse(
+                                maximumInput.ValueText, out parsed))
                             ApplyTouchMaximum(rowIndex, parsed);
                     };
-                    maximumInput.Leave += delegate
+                    maximumInput.InputLeave += delegate
                     {
                         if (rowIndex < CustomBands.Count)
-                            maximumInput.Text =
+                            maximumInput.ValueText =
                                 CustomBands[rowIndex].MaximumLight.ToString();
                     };
                     isoInput.SelectedIndexChanged += delegate
@@ -7297,9 +7410,9 @@ namespace Jvdp.LightDarkroomOverlay
                     row.Controls.Add(maximumInput, 2, 0);
                     row.Controls.Add(increase, 3, 0);
                     row.Controls.Add(isoCaption, 4, 0);
-                    row.Controls.Add(new Panel(), 5, 0);
-                    row.Controls.Add(isoInput, 6, 0);
-                    row.Controls.Add(delete, 7, 0);
+                    row.Controls.Add(isoInput, 5, 0);
+                    row.Controls.Add(delete, 6, 0);
+                    row.Controls.Add(new Panel(), 7, 0);
                     bandRowsHost.Controls.Add(row, 0, index + 1);
                     bandRowsHost.RowStyles.Add(
                         new RowStyle(SizeType.AutoSize));
@@ -7502,10 +7615,10 @@ namespace Jvdp.LightDarkroomOverlay
             string text, string accessibleName)
         {
             Button button = MakeDialogButton(text, false);
-            button.AutoSize = false;
-            button.Size = new Size(54, 54);
-            button.MinimumSize = new Size(54, 54);
-            button.MaximumSize = new Size(54, 54);
+            button.AutoSize = true;
+            button.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            button.MinimumSize = new Size(68, 68);
+            button.Padding = new Padding(18, 8, 18, 8);
             button.Font = new Font("Segoe UI", 18, FontStyle.Bold);
             button.Margin = Padding.Empty;
             button.AccessibleName = accessibleName;

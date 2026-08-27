@@ -797,7 +797,8 @@ namespace Jvdp.LayoutTests
                     control is TableLayoutPanel)
                     rowCount++;
                 bool touchInput = control is Button ||
-                    control is NumericUpDown || control is TextBox ||
+                    control is NumericUpDown ||
+                    control is TouchNumberInput ||
                     control is ComboBox;
                 if (touchInput && control.Enabled &&
                     IsVisibleForValidation(control, root))
