@@ -27,9 +27,9 @@ Serial discovery and the periodic Darkroom control probe run outside the UI thre
 Opening a slow COM port or waiting for a Darkroom native control cannot freeze the
 main window.
 
-1. Identifies Darkroom's one real `CXToolbar` once in a background preflight and
-   caches the validated handles for that Darkroom process.
-2. Leaves Booth Mode with Escape only after the configured stability period.
+1. Leaves Booth Mode with Escape only after the configured stability period.
+2. Identifies Darkroom's one real `CXToolbar` after that transition and caches
+   the validated handles for all later changes in the same Darkroom process.
 3. Sends Settings command `660` exactly once through the prepared command target.
 4. Sends the native Camera command `33082` directly. The bounded native page
    navigation remains available only as a recovery route.
@@ -42,9 +42,9 @@ main window.
 The v5 accessibility/MSAA Camera search was removed after the test showed that Darkroom had already opened the native `Photos` settings page and the overlay then terminated during accessibility enumeration. Camera no longer needs to be found as a tile or label.
 
 The normal action no longer traverses Darkroom's full UI Automation tree. Each step
-is timed in the log and the settings/change path has a ten-second deadline. Toolbar
-preparation is retried in the background without blocking the dashboard or an active
-automatic action.
+is timed in the log and the settings/change path has a ten-second deadline. The
+toolbar is deliberately not required while Booth Mode is still active because some
+Darkroom versions expose it only after Booth Mode has been left.
 
 Detailed flow and logs: `DARKROOM-FLOW-AND-LOGGING.md`.
 ## ISO commit fix (v7)

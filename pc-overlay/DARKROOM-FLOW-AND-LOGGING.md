@@ -1,12 +1,12 @@
 # Darkroom flow and logging
 
-## Fast prepared flow
+## Fast cached flow
 
-The current application performs the expensive read-only `CXToolbar` validation in
-the background as soon as a Darkroom process is detected. The validated toolbar and
-command target are reused for the lifetime of that process. The 60-second light/ISO
-stability period therefore does not include an additional toolbar scan at the moment
-the ISO action starts.
+The current application performs the read-only `CXToolbar` validation immediately
+after leaving Booth Mode. Some Darkroom versions do not expose that control while
+Booth Mode is active, so automatic adjustment must never wait for a background
+preparation in that state. The validated toolbar and command target are then reused
+for the remaining lifetime of that Darkroom process.
 
 The action path uses native child-window enumeration before accessibility APIs,
 addresses Camera directly with command `33082`, finds an exact ISO with
