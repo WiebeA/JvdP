@@ -6551,10 +6551,10 @@ namespace Jvdp.LightDarkroomOverlay
             previewCard.Controls.Add(previewLayout);
 
             bandEditorCard.Dock = DockStyle.Fill;
-            // This row receives the remaining height. A compact minimum keeps
-            // the fixed footer reachable on short Surface viewports, while the
-            // card's own scrollbar exposes every large touch row.
-            bandEditorCard.MinimumSize = new Size(0, 72);
+            // This row receives the remaining height. Keep its minimum inside
+            // the actual free row height on short 720px Surface viewports; the
+            // card's own scrollbar exposes every full-size touch row.
+            bandEditorCard.MinimumSize = new Size(0, 52);
             bandEditorCard.Margin = new Padding(0, 0, 0, 12);
 
             TableLayoutPanel footer = new TableLayoutPanel();
