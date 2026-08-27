@@ -17,6 +17,10 @@ namespace Jvdp.LayoutTests
         [DllImport("user32.dll")]
         private static extern uint GetDpiForWindow(IntPtr handle);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetThreadDpiAwarenessContext(
+            IntPtr dpiContext);
+
         private static Rectangle matrixWorkingArea;
         private static int matrixScreenDpi = 96;
         private static bool headlessMode;
@@ -66,6 +70,21 @@ namespace Jvdp.LayoutTests
                 return String.Equals(value, "--headless",
                     StringComparison.OrdinalIgnoreCase);
             });
+            if (headlessMode)
+            {
+                try
+                {
+                    // A hidden WinForms tree does not receive the same
+                    // per-monitor show/layout cycle as a real window. Keep
+                    // this CI pass on a deterministic 96-DPI logical canvas;
+                    // the production calculator is separately exercised at
+                    // 100, 125, 150, 175 and 200 percent below.
+                    SetThreadDpiAwarenessContext(new IntPtr(-1));
+                }
+                catch (EntryPointNotFoundException)
+                {
+                }
+            }
             SelectHighestDpiScreen();
             string outputArgument = Array.Find(args, delegate(string value)
             {
@@ -78,6 +97,7 @@ namespace Jvdp.LayoutTests
             Directory.CreateDirectory(outputDirectory);
 
             List<CaptureResult> results = new List<CaptureResult>();
+            results.Add(CaptureRangeDpiRegression());
             Dictionary<string, List<string>> stateImages =
                 new Dictionary<string, List<string>>(
                     StringComparer.OrdinalIgnoreCase);
@@ -139,6 +159,9 @@ namespace Jvdp.LayoutTests
                 if (headlessMode)
                 {
                     IntPtr handle = form.Handle;
+                    form.Location = matrixWorkingArea.Location;
+                    form.ClientSize = requestedSize;
+                    Application.DoEvents();
                 }
                 else
                 {
@@ -248,6 +271,9 @@ namespace Jvdp.LayoutTests
                 if (headlessMode)
                 {
                     IntPtr handle = form.Handle;
+                    form.Location = matrixWorkingArea.Location;
+                    form.ClientSize = requestedSize;
+                    Application.DoEvents();
                 }
                 else
                 {
@@ -292,6 +318,8 @@ namespace Jvdp.LayoutTests
                 if (headlessMode)
                 {
                     IntPtr handle = form.Handle;
+                    form.Location = matrixWorkingArea.Location;
+                    Application.DoEvents();
                 }
                 else
                 {
@@ -455,6 +483,48 @@ namespace Jvdp.LayoutTests
             // doing both reports every correctly grown label/button as clipped.
             if (control.AutoSize)
             {
+                Label autoLabel = control as Label;
+                if (autoLabel != null)
+                {
+                    int labelWidth = Math.Max(1,
+                        autoLabel.ClientSize.Width -
+                        autoLabel.Padding.Horizontal);
+                    int labelHeight = Math.Max(1,
+                        autoLabel.ClientSize.Height -
+                        autoLabel.Padding.Vertical);
+                    Size labelMeasured;
+                    if (autoLabel.UseCompatibleTextRendering)
+                    {
+                        using (Graphics graphics =
+                            autoLabel.CreateGraphics())
+                        using (StringFormat format = new StringFormat())
+                        {
+                            format.Trimming = StringTrimming.None;
+                            SizeF measuredSize = graphics.MeasureString(
+                                autoLabel.Text, autoLabel.Font,
+                                labelWidth, format);
+                            labelMeasured = new Size(
+                                (int)Math.Ceiling(measuredSize.Width),
+                                (int)Math.Ceiling(measuredSize.Height));
+                        }
+                    }
+                    else
+                    {
+                        labelMeasured = TextRenderer.MeasureText(
+                            autoLabel.Text, autoLabel.Font,
+                            new Size(labelWidth, Int32.MaxValue),
+                            TextFormatFlags.NoPadding |
+                            TextFormatFlags.NoPrefix |
+                            TextFormatFlags.WordBreak);
+                    }
+                    if (labelMeasured.Width > labelWidth + 2 ||
+                        labelMeasured.Height > labelHeight + 2)
+                        issues.Add(String.Format(
+                            "AutoSize-label past niet: '{0}' nodig={1}, beschikbaar={2}x{3}.",
+                            SafeText(autoLabel.Text), labelMeasured,
+                            labelWidth, labelHeight));
+                    return;
+                }
                 Size preferred = control.GetPreferredSize(
                     control.MaximumSize.IsEmpty
                         ? Size.Empty : control.MaximumSize);
@@ -570,6 +640,41 @@ namespace Jvdp.LayoutTests
                     ? null : bandsField.GetValue(range) as List<IsoBand>;
                 if (bands == null || bands.Count == 0)
                     continue;
+                LightRangeControl.LayoutSnapshot layout =
+                    range.GetLayoutSnapshotForTest();
+                Rectangle client = range.ClientRectangle;
+                if (range.ClientSize.Height < layout.RequiredHeight)
+                    issues.Add(String.Format(
+                        "Bereikvak is te laag: {0}px, minimaal {1}px nodig voor tekst en schuifbalk.",
+                        range.ClientSize.Height, layout.RequiredHeight));
+                if (layout.RangeTextBounds.Top < client.Top ||
+                    layout.RangeTextBounds.Bottom > client.Bottom ||
+                    layout.IsoTextBounds.Top < client.Top ||
+                    layout.IsoTextBounds.Bottom > client.Bottom)
+                    issues.Add(String.Format(
+                        "Bereiktekst valt buiten het tekenvlak: bereik={0}, ISO={1}, vlak={2}.",
+                        layout.RangeTextBounds,
+                        layout.IsoTextBounds, client));
+                if (layout.RangeTextBounds.Height <
+                        layout.RangeMeasuredHeight ||
+                    layout.IsoTextBounds.Height <
+                        layout.IsoMeasuredHeight)
+                    issues.Add(String.Format(
+                        "Bereikteksthoogte is onvoldoende: bereik {0}/{1}px, ISO {2}/{3}px.",
+                        layout.RangeTextBounds.Height,
+                        layout.RangeMeasuredHeight,
+                        layout.IsoTextBounds.Height,
+                        layout.IsoMeasuredHeight));
+                int markerTop = layout.BarY - layout.MarkerRadius;
+                int markerBottom = layout.BarY + layout.MarkerRadius;
+                if (layout.IsoTextBounds.Bottom >= markerTop)
+                    issues.Add(String.Format(
+                        "ISO-tekst en schuifbalk overlappen verticaal: tekst tot {0}px, balk vanaf {1}px.",
+                        layout.IsoTextBounds.Bottom, markerTop));
+                if (markerBottom > client.Bottom)
+                    issues.Add(String.Format(
+                        "Schuifmarkering valt buiten het bereikvak: tot {0}px, vlak tot {1}px.",
+                        markerBottom, client.Bottom));
                 int cellWidth = Math.Max(1,
                     (range.ClientSize.Width - 2) / bands.Count);
                 int available = Math.Max(1, cellWidth -
@@ -601,6 +706,69 @@ namespace Jvdp.LayoutTests
                     }
                 }
             }
+        }
+
+        private static CaptureResult CaptureRangeDpiRegression()
+        {
+            CaptureResult result = new CaptureResult();
+            result.State = "bereik-dpi-regressie";
+            result.RequestedSize = Size.Empty;
+            result.ActualSize = Size.Empty;
+            result.Dpi = 0;
+            float[] dpiScales = { 1f, 1.25f, 1.5f, 1.75f, 2f };
+            float[] visualScales = { 1f, 1.3f };
+            int[] bandCounts = { 6, 8 };
+            foreach (float dpiScale in dpiScales)
+            {
+                foreach (float visualScale in visualScales)
+                {
+                    foreach (int bandCount in bandCounts)
+                    {
+                        int rangeHeight = (int)Math.Ceiling(
+                            17 * dpiScale * visualScale);
+                        int isoHeight = (int)Math.Ceiling(
+                            16 * dpiScale * visualScale);
+                        int width = (int)Math.Ceiling(
+                            bandCount * 150 * dpiScale);
+                        LightRangeControl.LayoutSnapshot required =
+                            LightRangeControl.CalculateVerticalLayoutForTest(
+                                new Rectangle(1, 1,
+                                    Math.Max(1, width - 2), 1),
+                                rangeHeight, isoHeight, dpiScale,
+                                visualScale, true);
+                        Rectangle client = new Rectangle(
+                            0, 0, width, required.RequiredHeight);
+                        Rectangle content = new Rectangle(
+                            1, 1, width - 2,
+                            required.RequiredHeight - 2);
+                        LightRangeControl.LayoutSnapshot layout =
+                            LightRangeControl.CalculateVerticalLayoutForTest(
+                                content, rangeHeight, isoHeight,
+                                dpiScale, visualScale, true);
+                        int markerTop = layout.BarY -
+                            layout.MarkerRadius;
+                        int markerBottom = layout.BarY +
+                            layout.MarkerRadius;
+                        int minimumTextBarGap = (int)Math.Ceiling(
+                            12 * dpiScale);
+                        if (!client.Contains(layout.RangeTextBounds) ||
+                            !client.Contains(layout.IsoTextBounds) ||
+                            layout.RangeTextBounds.Bottom >
+                                layout.IsoTextBounds.Top ||
+                            layout.IsoTextBounds.Bottom +
+                                minimumTextBarGap > markerTop ||
+                            markerBottom > client.Bottom ||
+                            layout.RequiredHeight != client.Height)
+                            result.Issues.Add(String.Format(
+                                "Bereiklayout faalt bij {0:0}% DPI, schaal {1:0.0}, {2} bereiken: bereik={3}, ISO={4}, marker={5}..{6}, vlak={7}.",
+                                dpiScale * 100, visualScale,
+                                bandCount, layout.RangeTextBounds,
+                                layout.IsoTextBounds, markerTop,
+                                markerBottom, client));
+                    }
+                }
+            }
+            return result;
         }
 
         private static IEnumerable<Control> EnumerateControls(Control root)
@@ -714,12 +882,28 @@ namespace Jvdp.LayoutTests
         {
             if (headlessMode)
             {
-                Screen primary = Screen.PrimaryScreen;
-                matrixWorkingArea = primary.WorkingArea;
-                matrixScreenDpi = 96;
+                Screen headlessScreen = Screen.PrimaryScreen;
+                int headlessDpi = ProbeHiddenScreenDpi(headlessScreen);
+                foreach (Screen screen in Screen.AllScreens)
+                {
+                    int dpi = ProbeHiddenScreenDpi(screen);
+                    Console.WriteLine(
+                        "Layout matrix headless probe: {0}, bounds={1}, work={2}, dpi={3}",
+                        screen.DeviceName, screen.Bounds,
+                        screen.WorkingArea, dpi);
+                    if (dpi < headlessDpi ||
+                        (dpi == headlessDpi && screen.Primary))
+                    {
+                        headlessScreen = screen;
+                        headlessDpi = dpi;
+                    }
+                }
+                matrixWorkingArea = headlessScreen.WorkingArea;
+                matrixScreenDpi = headlessDpi;
                 Console.WriteLine(
                     "Layout matrix display: {0}, work={1}, dpi={2}, headless=true",
-                    primary.DeviceName, matrixWorkingArea, matrixScreenDpi);
+                    headlessScreen.DeviceName, matrixWorkingArea,
+                    matrixScreenDpi);
                 return;
             }
             Screen selected = Screen.PrimaryScreen;
@@ -768,6 +952,27 @@ namespace Jvdp.LayoutTests
                 probe.Close();
                 Application.DoEvents();
                 return dpi;
+            }
+        }
+
+        private static int ProbeHiddenScreenDpi(Screen screen)
+        {
+            using (Form probe = new Form())
+            {
+                probe.FormBorderStyle = FormBorderStyle.None;
+                probe.StartPosition = FormStartPosition.Manual;
+                probe.ShowInTaskbar = false;
+                Rectangle target = new Rectangle(
+                    screen.WorkingArea.Left + 8,
+                    screen.WorkingArea.Top + 8, 64, 64);
+                probe.Bounds = target;
+                IntPtr handle = probe.Handle;
+                // A hidden HWND is initially associated with the primary
+                // monitor. Move it again after creation so Windows sends the
+                // per-monitor DPI transition without ever showing the form.
+                probe.Bounds = target;
+                Application.DoEvents();
+                return GetEffectiveDpi(probe);
             }
         }
 

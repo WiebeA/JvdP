@@ -143,13 +143,37 @@ namespace Jvdp.LightDarkroomOverlay
 
     internal sealed class LightRangeControl : Control
     {
+        internal sealed class LayoutSnapshot
+        {
+            internal Rectangle RangeTextBounds;
+            internal Rectangle IsoTextBounds;
+            internal int BarY;
+            internal int MarkerRadius;
+            internal int RequiredHeight;
+            internal int RangeMeasuredHeight;
+            internal int IsoMeasuredHeight;
+        }
+
         private List<IsoBand> bands = new List<IsoBand>();
         private int lightValue = -1;
         private int activeIso = -1;
         private bool dragging;
+        private bool interactive;
+        private bool updatingReadableMinimumSize;
         private float visualScale = 1f;
 
-        public bool Interactive { get; set; }
+        public bool Interactive
+        {
+            get { return interactive; }
+            set
+            {
+                if (interactive == value)
+                    return;
+                interactive = value;
+                UpdateReadableMinimumSize();
+                Invalidate();
+            }
+        }
 
         public float VisualScale
         {
@@ -157,6 +181,7 @@ namespace Jvdp.LightDarkroomOverlay
             set
             {
                 visualScale = Math.Max(1f, Math.Min(1.3f, value));
+                UpdateReadableMinimumSize();
                 Invalidate();
             }
         }
@@ -177,6 +202,32 @@ namespace Jvdp.LightDarkroomOverlay
                      ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            UpdateReadableMinimumSize();
+        }
+
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            UpdateReadableMinimumSize();
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            UpdateReadableMinimumSize();
+        }
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            Size preferred = base.GetPreferredSize(proposedSize);
+            return new Size(
+                Math.Max(preferred.Width, MinimumSize.Width),
+                Math.Max(preferred.Height, MinimumSize.Height));
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -240,33 +291,66 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void UpdateReadableMinimumSize()
         {
-            if (bands.Count == 0)
+            if (bands.Count == 0 || updatingReadableMinimumSize)
                 return;
-            int widest = 0;
-            int lower = 0;
-            using (Font readable = new Font(
-                "Segoe UI", OverlayForm.MinimumReadableUiFontSize,
-                FontStyle.Bold))
+            updatingReadableMinimumSize = true;
+            Graphics measurementGraphics = IsHandleCreated
+                ? CreateGraphics() : null;
+            try
             {
-                foreach (IsoBand band in bands)
+                int widest = 0;
+                int lower = 0;
+                using (Font readable = new Font(
+                    "Segoe UI", OverlayForm.MinimumReadableUiFontSize,
+                    FontStyle.Bold))
                 {
-                    widest = Math.Max(widest, TextRenderer.MeasureText(
-                        lower + "–" + band.MaximumLight, readable,
-                        Size.Empty, TextFormatFlags.NoPadding |
-                        TextFormatFlags.SingleLine).Width);
-                    widest = Math.Max(widest, TextRenderer.MeasureText(
-                        "ISO " + band.Iso, readable,
-                        Size.Empty, TextFormatFlags.NoPadding |
-                        TextFormatFlags.SingleLine).Width);
-                    lower = band.MaximumLight + 1;
+                    foreach (IsoBand band in bands)
+                    {
+                        widest = Math.Max(widest, MeasurePaintTextWidth(
+                            measurementGraphics,
+                            lower + "–" + band.MaximumLight, readable));
+                        widest = Math.Max(widest, MeasurePaintTextWidth(
+                            measurementGraphics,
+                            "ISO " + band.Iso, readable));
+                        lower = band.MaximumLight + 1;
+                    }
+                }
+                float dpiScale = GetDpiScale();
+                int horizontalInset = (int)Math.Ceiling(20 * dpiScale);
+                int requiredWidth = bands.Count *
+                    (widest + horizontalInset) + 2;
+                int layoutWidth = Math.Max(
+                    Math.Max(ClientSize.Width, MinimumSize.Width),
+                    requiredWidth);
+                int cellWidth = Math.Max(1,
+                    (layoutWidth - 2) / bands.Count);
+                int textWidth = Math.Max(1, cellWidth -
+                    (int)Math.Ceiling(10 * GetPaintScale()));
+                using (Font rangeFont = CreateReadablePaintFont(
+                    9.5f * visualScale, FontStyle.Bold,
+                    textWidth, false, measurementGraphics))
+                using (Font isoFont = CreateReadablePaintFont(
+                    9f * visualScale, FontStyle.Regular,
+                    textWidth, true, measurementGraphics))
+                {
+                    LayoutSnapshot layout = CalculateVerticalLayout(
+                        new Rectangle(1, 1,
+                            Math.Max(1, layoutWidth - 2), 1),
+                        rangeFont, isoFont, measurementGraphics);
+                    Size required = new Size(
+                        Math.Max(MinimumSize.Width, requiredWidth),
+                        Math.Max(MinimumSize.Height,
+                            layout.RequiredHeight));
+                    if (MinimumSize != required)
+                        MinimumSize = required;
                 }
             }
-            int inset = (int)Math.Ceiling(
-                16 * Math.Max(1f, DeviceDpi / 96f));
-            MinimumSize = new Size(
-                Math.Max(MinimumSize.Width,
-                    bands.Count * (widest + inset) + 2),
-                MinimumSize.Height);
+            finally
+            {
+                if (measurementGraphics != null)
+                    measurementGraphics.Dispose();
+                updatingReadableMinimumSize = false;
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -290,10 +374,14 @@ namespace Jvdp.LightDarkroomOverlay
             int textWidth = Math.Max(1,
                 cellWidth - (int)Math.Round(8 * paintScale));
             using (Font rangeFont = CreateReadablePaintFont(
-                9.5f * visualScale, FontStyle.Bold, textWidth, false))
+                9.5f * visualScale, FontStyle.Bold, textWidth, false,
+                e.Graphics))
             using (Font isoFont = CreateReadablePaintFont(
-                9f * visualScale, FontStyle.Regular, textWidth, true))
+                9f * visualScale, FontStyle.Regular, textWidth, true,
+                e.Graphics))
             {
+                LayoutSnapshot layout = CalculateVerticalLayout(
+                    content, rangeFont, isoFont, e.Graphics);
                 for (int index = 0; index < bands.Count; index++)
                 {
                     IsoBand band = bands[index];
@@ -326,10 +414,10 @@ namespace Jvdp.LightDarkroomOverlay
                         lower + "–" + band.MaximumLight, rangeFont,
                         new Rectangle(
                             left + (int)Math.Round(4 * paintScale),
-                            content.Top + (int)Math.Round(8 * paintScale),
+                            layout.RangeTextBounds.Top,
                             Math.Max(1, right - left -
                                 (int)Math.Round(8 * paintScale)),
-                            (int)Math.Round(24 * paintScale)),
+                            layout.RangeTextBounds.Height),
                         rangeColor, TextFormatFlags.HorizontalCenter |
                         TextFormatFlags.VerticalCenter |
                         TextFormatFlags.NoPadding);
@@ -337,10 +425,10 @@ namespace Jvdp.LightDarkroomOverlay
                         "ISO " + band.Iso, isoFont,
                         new Rectangle(
                             left + (int)Math.Round(4 * paintScale),
-                            content.Top + (int)Math.Round(34 * paintScale),
+                            layout.IsoTextBounds.Top,
                             Math.Max(1, right - left -
                                 (int)Math.Round(8 * paintScale)),
-                            (int)Math.Round(23 * paintScale)),
+                            layout.IsoTextBounds.Height),
                         active ? Color.FromArgb(20, 102, 196) :
                             Color.FromArgb(101, 108, 118),
                         TextFormatFlags.HorizontalCenter |
@@ -348,56 +436,194 @@ namespace Jvdp.LightDarkroomOverlay
                         TextFormatFlags.NoPadding);
                     lower = band.MaximumLight + 1;
                 }
-            }
 
-            int barY = content.Bottom - (int)Math.Round(19 * paintScale);
-            int barLeft = content.Left + (int)Math.Round(18 * paintScale);
-            int barRight = content.Right - (int)Math.Round(18 * paintScale);
-            using (Pen baseBar = new Pen(
-                Color.FromArgb(190, 196, 204), 5f * paintScale))
-            {
-                baseBar.StartCap = System.Drawing.Drawing2D.LineCap.Round;
-                baseBar.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-                e.Graphics.DrawLine(baseBar, barLeft, barY, barRight, barY);
-            }
-            if (activeIndex >= 0)
-            {
-                int segmentLeft = barLeft +
-                    (barRight - barLeft) * activeIndex / bands.Count;
-                int segmentRight = barLeft +
-                    (barRight - barLeft) * (activeIndex + 1) / bands.Count;
-                using (Pen activeBar = new Pen(
-                    Color.FromArgb(31, 111, 235), 5f * paintScale))
+                int barY = layout.BarY;
+                int barLeft = content.Left +
+                    (int)Math.Round(18 * paintScale);
+                int barRight = content.Right -
+                    (int)Math.Round(18 * paintScale);
+                using (Pen baseBar = new Pen(
+                    Color.FromArgb(190, 196, 204), 5f * paintScale))
                 {
-                    activeBar.StartCap = System.Drawing.Drawing2D.LineCap.Round;
-                    activeBar.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-                    e.Graphics.DrawLine(activeBar, segmentLeft, barY,
-                        segmentRight, barY);
+                    baseBar.StartCap =
+                        System.Drawing.Drawing2D.LineCap.Round;
+                    baseBar.EndCap =
+                        System.Drawing.Drawing2D.LineCap.Round;
+                    e.Graphics.DrawLine(
+                        baseBar, barLeft, barY, barRight, barY);
+                }
+                if (activeIndex >= 0)
+                {
+                    int segmentLeft = barLeft +
+                        (barRight - barLeft) * activeIndex / bands.Count;
+                    int segmentRight = barLeft +
+                        (barRight - barLeft) *
+                        (activeIndex + 1) / bands.Count;
+                    using (Pen activeBar = new Pen(
+                        Color.FromArgb(31, 111, 235), 5f * paintScale))
+                    {
+                        activeBar.StartCap =
+                            System.Drawing.Drawing2D.LineCap.Round;
+                        activeBar.EndCap =
+                            System.Drawing.Drawing2D.LineCap.Round;
+                        e.Graphics.DrawLine(activeBar, segmentLeft, barY,
+                            segmentRight, barY);
+                    }
+                }
+                if (lightValue >= 0)
+                {
+                    int markerX = barLeft + (int)Math.Round(
+                        (barRight - barLeft) * Math.Max(0,
+                            Math.Min(100, lightValue)) / 100.0);
+                    int markerRadius = layout.MarkerRadius;
+                    using (SolidBrush marker = new SolidBrush(
+                        Color.FromArgb(31, 111, 235)))
+                        e.Graphics.FillEllipse(marker,
+                            markerX - markerRadius,
+                            barY - markerRadius, markerRadius * 2,
+                            markerRadius * 2);
+                    using (Pen whiteRing = new Pen(
+                        Color.White, 2f * paintScale))
+                        e.Graphics.DrawEllipse(whiteRing,
+                            markerX - markerRadius,
+                            barY - markerRadius, markerRadius * 2,
+                            markerRadius * 2);
                 }
             }
-            if (lightValue >= 0)
+        }
+
+        internal LayoutSnapshot GetLayoutSnapshotForTest()
+        {
+            Rectangle content = new Rectangle(1, 1,
+                Math.Max(1, ClientSize.Width - 2),
+                Math.Max(1, ClientSize.Height - 2));
+            int cellWidth = Math.Max(1,
+                content.Width / Math.Max(1, bands.Count));
+            int textWidth = Math.Max(1, cellWidth -
+                (int)Math.Round(8 * GetPaintScale()));
+            Graphics measurementGraphics = IsHandleCreated
+                ? CreateGraphics() : null;
+            try
             {
-                int markerX = barLeft + (int)Math.Round(
-                    (barRight - barLeft) * Math.Max(0,
-                        Math.Min(100, lightValue)) / 100.0);
-                int markerRadius = (int)Math.Round(
-                    (Interactive ? 11 : 8) * paintScale);
-                using (SolidBrush marker = new SolidBrush(
-                    Color.FromArgb(31, 111, 235)))
-                    e.Graphics.FillEllipse(marker, markerX - markerRadius,
-                        barY - markerRadius, markerRadius * 2,
-                        markerRadius * 2);
-                using (Pen whiteRing = new Pen(
-                    Color.White, 2f * paintScale))
-                    e.Graphics.DrawEllipse(whiteRing,
-                        markerX - markerRadius, barY - markerRadius,
-                        markerRadius * 2, markerRadius * 2);
+                using (Font rangeFont = CreateReadablePaintFont(
+                    9.5f * visualScale, FontStyle.Bold,
+                    textWidth, false, measurementGraphics))
+                using (Font isoFont = CreateReadablePaintFont(
+                    9f * visualScale, FontStyle.Regular,
+                    textWidth, true, measurementGraphics))
+                    return CalculateVerticalLayout(
+                        content, rangeFont, isoFont,
+                        measurementGraphics);
             }
+            finally
+            {
+                if (measurementGraphics != null)
+                    measurementGraphics.Dispose();
+            }
+        }
+
+        private LayoutSnapshot CalculateVerticalLayout(
+            Rectangle content, Font rangeFont, Font isoFont,
+            IDeviceContext deviceContext)
+        {
+            float dpiScale = GetDpiScale();
+            int rangeMeasuredHeight = MeasurePaintTextHeight(
+                deviceContext, rangeFont);
+            int isoMeasuredHeight = MeasurePaintTextHeight(
+                deviceContext, isoFont);
+            return CalculateVerticalLayoutCore(
+                content, rangeMeasuredHeight, isoMeasuredHeight,
+                dpiScale, visualScale, Interactive);
+        }
+
+        private int MeasurePaintTextHeight(
+            IDeviceContext deviceContext, Font font)
+        {
+            if (deviceContext != null)
+                return TextRenderer.MeasureText(
+                    deviceContext, "Ag", font, Size.Empty,
+                    TextFormatFlags.NoPadding |
+                    TextFormatFlags.NoPrefix |
+                    TextFormatFlags.SingleLine).Height;
+            return (int)Math.Ceiling(font.GetHeight(DeviceDpi));
+        }
+
+        private int MeasurePaintTextWidth(
+            IDeviceContext deviceContext, string value, Font font)
+        {
+            if (deviceContext != null)
+                return TextRenderer.MeasureText(
+                    deviceContext, value, font, Size.Empty,
+                    TextFormatFlags.NoPadding |
+                    TextFormatFlags.NoPrefix |
+                    TextFormatFlags.SingleLine).Width;
+            return TextRenderer.MeasureText(
+                value, font, Size.Empty,
+                TextFormatFlags.NoPadding |
+                TextFormatFlags.NoPrefix |
+                TextFormatFlags.SingleLine).Width;
+        }
+
+        internal static LayoutSnapshot CalculateVerticalLayoutForTest(
+            Rectangle content, int rangeMeasuredHeight,
+            int isoMeasuredHeight, float dpiScale,
+            float visualScale, bool interactive)
+        {
+            return CalculateVerticalLayoutCore(
+                content, rangeMeasuredHeight, isoMeasuredHeight,
+                dpiScale, visualScale, interactive);
+        }
+
+        private static LayoutSnapshot CalculateVerticalLayoutCore(
+            Rectangle content, int rangeMeasuredHeight,
+            int isoMeasuredHeight, float dpiScale,
+            float visualScale, bool interactive)
+        {
+            dpiScale = Math.Max(1f, dpiScale);
+            visualScale = Math.Max(1f, Math.Min(1.3f, visualScale));
+            float paintScale = dpiScale * visualScale;
+            int lineSafety = (int)Math.Ceiling(4 * dpiScale);
+            int rangeHeight = rangeMeasuredHeight + lineSafety;
+            int isoHeight = isoMeasuredHeight + lineSafety;
+            int topPadding = (int)Math.Ceiling(12 * dpiScale);
+            int lineGap = (int)Math.Ceiling(8 * dpiScale);
+            int textToBarGap = (int)Math.Ceiling(12 * dpiScale);
+            int bottomPadding = (int)Math.Ceiling(12 * dpiScale);
+            int markerRadius = (int)Math.Ceiling(
+                (interactive ? 12 : 9) * paintScale);
+
+            Rectangle rangeBounds = new Rectangle(
+                content.Left,
+                content.Top + topPadding,
+                content.Width, rangeHeight);
+            Rectangle isoBounds = new Rectangle(
+                content.Left,
+                rangeBounds.Bottom + lineGap,
+                content.Width, isoHeight);
+            int minimumBarY = isoBounds.Bottom +
+                textToBarGap + markerRadius;
+            int preferredBarY = content.Bottom -
+                bottomPadding - markerRadius;
+            int barY = Math.Max(minimumBarY, preferredBarY);
+            int requiredHeight = topPadding + rangeHeight +
+                lineGap + isoHeight + textToBarGap +
+                markerRadius * 2 + bottomPadding + 2;
+
+            return new LayoutSnapshot {
+                RangeTextBounds = rangeBounds,
+                IsoTextBounds = isoBounds,
+                BarY = barY,
+                MarkerRadius = markerRadius,
+                RequiredHeight = requiredHeight,
+                RangeMeasuredHeight = rangeMeasuredHeight,
+                IsoMeasuredHeight = isoMeasuredHeight
+            };
         }
 
         private Font CreateReadablePaintFont(
             float preferredSize, FontStyle style,
-            int availableWidth, bool isoText)
+            int availableWidth, bool isoText,
+            IDeviceContext deviceContext)
         {
             float minimum = Math.Min(
                 preferredSize, OverlayForm.MinimumReadableUiFontSize);
@@ -412,10 +638,8 @@ namespace Jvdp.LightDarkroomOverlay
                     string value = isoText
                         ? "ISO " + band.Iso
                         : lower + "–" + band.MaximumLight;
-                    int width = TextRenderer.MeasureText(
-                        value, candidate, Size.Empty,
-                        TextFormatFlags.NoPadding |
-                        TextFormatFlags.SingleLine).Width;
+                    int width = MeasurePaintTextWidth(
+                        deviceContext, value, candidate);
                     if (width > availableWidth)
                     {
                         fits = false;
@@ -432,7 +656,12 @@ namespace Jvdp.LightDarkroomOverlay
 
         private float GetPaintScale()
         {
-            return visualScale * Math.Max(1f, DeviceDpi / 96f);
+            return visualScale * GetDpiScale();
+        }
+
+        private float GetDpiScale()
+        {
+            return Math.Max(1f, DeviceDpi / 96f);
         }
     }
 
@@ -5716,12 +5945,17 @@ namespace Jvdp.LightDarkroomOverlay
             coverPreviewCaption.Margin = new Padding(0, 0, 0, 12);
             coverPreviewTitle.AutoSize = true;
             coverPreviewTitle.AutoEllipsis = false;
+            // GDI+ wraps even an unusually long word at character
+            // boundaries. That keeps custom titles fully visible instead of
+            // silently clipping them at the right edge.
+            coverPreviewTitle.UseCompatibleTextRendering = true;
             coverPreviewTitle.MaximumSize = new Size(900, 0);
             coverPreviewTitle.Dock = DockStyle.Fill;
             coverPreviewTitle.TextAlign = ContentAlignment.MiddleCenter;
             coverPreviewTitle.Margin = new Padding(8, 0, 8, 8);
             coverPreviewMessage.AutoSize = true;
             coverPreviewMessage.AutoEllipsis = false;
+            coverPreviewMessage.UseCompatibleTextRendering = true;
             coverPreviewMessage.MaximumSize = new Size(900, 0);
             coverPreviewMessage.Dock = DockStyle.Fill;
             coverPreviewMessage.TextAlign = ContentAlignment.TopCenter;
@@ -5930,7 +6164,7 @@ namespace Jvdp.LightDarkroomOverlay
             previewLayout.AutoSize = true;
             previewLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             previewLayout.Dock = DockStyle.Fill;
-            previewLayout.Padding = new Padding(14, 6, 14, 8);
+            previewLayout.Padding = new Padding(14, 10, 14, 12);
             previewLayout.ColumnCount = 4;
             previewLayout.RowCount = 2;
             previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -5955,7 +6189,9 @@ namespace Jvdp.LightDarkroomOverlay
                 AnchorStyles.Right;
             previewText.Margin = Padding.Empty;
             previewRange.Dock = DockStyle.Fill;
-            previewRange.MinimumSize = new Size(0, 100);
+            // Keep the two text lines, drag marker and slider comfortably
+            // separated even before the DPI-aware minimum is calculated.
+            previewRange.MinimumSize = new Size(0, 128);
             previewRange.Margin = Padding.Empty;
             previewLayout.Controls.Add(previewCaption, 0, 0);
             previewLayout.Controls.Add(previewLightCaption, 1, 0);

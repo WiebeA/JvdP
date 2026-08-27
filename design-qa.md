@@ -1,4 +1,4 @@
-# Design QA — JvdP Lichtregeling 24.5.4
+# Design QA — JvdP Lichtregeling 24.5.5
 
 ## Audit health
 
@@ -8,14 +8,16 @@ tested matrix.
 ## Evidence and scope
 
 - Original problem evidence:
-  `C:\Users\waude\AppData\Local\Temp\codex-clipboard-3af6b407-d751-4f99-bbd1-5d5d8f15b67b.png`.
+  `artifacts/audit-range-clipping-20260827/01-booth-settings-clipping.png`
+  and `02-range-clipping-detail.png`.
 - Automated and rendered implementation evidence:
-  `artifacts/layout-matrix-24.5.4/`.
+  `artifacts/layout-matrix-24.5.5-final/`.
 - Exact client sizes: 1000×720, 1024×768, 1100×720, 1180×760, 1240×820,
   1280×720, 1366×768, 1440×900, 1600×900 and 1920×1080.
 - Six states per size: dashboard, expanded technical details, open status panel,
   Light & ISO settings, Overlay settings and the full-screen action message.
-- Total: 60 rendered application cases plus the separate full-screen hide control.
+- Total: 60 rendered application cases, a separate full-screen hide control and
+  a geometry regression at 100%, 125%, 150%, 175% and 200% DPI scaling.
 - The automated checks reject sibling intersections, controls outside a fixed
   parent, text that does not fit, UI fonts below 8.5 pt, undersized grid rows and
   range labels that do not fit at the readable minimum.
@@ -37,8 +39,15 @@ tested matrix.
 - The progress fill is docked inside its track and cannot grow taller than it.
 - Settings use nested table and flow layouts. Navigation always reads
   `Terug naar dashboard`; footer actions always read `Opslaan` and `Terug`.
-- Light-range labels are measured before painting. The range control grows to a
-  readable structural minimum instead of shrinking text below 8.5 pt.
+- Light-range labels are measured against the control's real drawing surface.
+  The range and ISO lines each have their own height, padding and gap. The slider
+  and drag marker are always placed below both text zones, and the control reports
+  the resulting DPI-aware minimum and preferred height to its parent layout.
+- The range regression now rejects vertical text clipping, a slider intersecting
+  the ISO line, a marker outside the control and insufficient control height. It
+  covers both six- and eight-range geometry at every tested DPI scale.
+- Full-screen preview labels use character-safe wrapping, so even a deliberately
+  unbroken 60-character title remains completely reachable and visible.
 - Full-screen title and message text have readable minimums of 15 pt and 13 pt.
   Text wraps without an enclosing frame and the entire message remains reachable.
 - The updater configuration form and the manual full-screen hide control are also
@@ -59,8 +68,9 @@ Custom booth profiles remain local and are not overwritten by an update.
 ## Evidence limit
 
 The final ten-size matrix was executed on the physical Microsoft Surface display
-at 144 DPI (150% Windows scaling) and passed all 60 cases with zero issues. The
-release workflow repeats the same matrix in its Windows runner environment. A
-physical 200% booth monitor is not available in this workspace, so that scale is
-covered by the same PerMonitorV2, measured-layout code and automated assertions,
-but remains a rollout smoke test rather than a claim made from these images.
+at 144 DPI (150% Windows scaling) and passed all 60 rendered cases with zero
+issues. The release workflow repeats the matrix in its Windows runner environment.
+The shared production geometry calculator additionally passed 100%, 125%, 150%,
+175% and 200% assertions. A physical 200% booth monitor is not available in this
+workspace, so that scale remains a rollout smoke test rather than a claim made
+from rendered physical-monitor evidence.
