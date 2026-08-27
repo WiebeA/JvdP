@@ -161,6 +161,7 @@ namespace Jvdp.LightDarkroomOverlay
         private bool interactive;
         private bool updatingReadableMinimumSize;
         private float visualScale = 1f;
+        private int dataChangeCount;
 
         public bool Interactive
         {
@@ -192,6 +193,11 @@ namespace Jvdp.LightDarkroomOverlay
         }
 
         public event EventHandler LightValueChanged;
+
+        internal int DataChangeCountForLayoutTest
+        {
+            get { return dataChangeCount; }
+        }
 
         public LightRangeControl()
         {
@@ -277,11 +283,30 @@ namespace Jvdp.LightDarkroomOverlay
 
         public void UpdateData(List<IsoBand> source, int light, int iso)
         {
+            bool unchanged = lightValue == light && activeIso == iso &&
+                bands.Count == source.Count;
+            if (unchanged)
+            {
+                for (int index = 0; index < source.Count; index++)
+                {
+                    if (bands[index].MaximumLight !=
+                            source[index].MaximumLight ||
+                        bands[index].Iso != source[index].Iso)
+                    {
+                        unchanged = false;
+                        break;
+                    }
+                }
+            }
+            if (unchanged)
+                return;
+
             bands = new List<IsoBand>();
             foreach (IsoBand band in source)
                 bands.Add(band.Clone());
             lightValue = light;
             activeIso = iso;
+            dataChangeCount++;
             AccessibleDescription = light >= 0 && iso > 0
                 ? "Lichtwaarde " + light + " wordt ISO " + iso + "."
                 : "Er is nog geen geldige lichtmeting.";
@@ -2242,9 +2267,8 @@ namespace Jvdp.LightDarkroomOverlay
             content.SuspendLayout();
             try
             {
-                panel.MinimumSize = Size.Empty;
-                panel.MaximumSize = Size.Empty;
-                panel.Width = width;
+                if (panel.Width != width)
+                    panel.Width = width;
 
                 int frameWidth = Math.Max(0,
                     panel.Width - panel.ClientSize.Width);
@@ -2253,21 +2277,33 @@ namespace Jvdp.LightDarkroomOverlay
                 int contentWidth = Math.Max(1,
                     width - frameWidth - panel.Padding.Horizontal);
 
-                content.MinimumSize = new Size(contentWidth, 0);
-                content.MaximumSize = new Size(contentWidth, 0);
-                content.Width = contentWidth;
+                Size contentMinimum = new Size(contentWidth, 0);
+                Size contentMaximum = new Size(contentWidth, 0);
+                if (content.MinimumSize != contentMinimum)
+                    content.MinimumSize = contentMinimum;
+                if (content.MaximumSize != contentMaximum)
+                    content.MaximumSize = contentMaximum;
+                if (content.Width != contentWidth)
+                    content.Width = contentWidth;
                 content.PerformLayout();
 
                 Size preferred = content.GetPreferredSize(
                     new Size(contentWidth, 0));
                 int contentHeight = Math.Max(1, preferred.Height);
-                content.Height = contentHeight;
+                if (content.Height != contentHeight)
+                    content.Height = contentHeight;
                 int panelHeight = contentHeight +
                     panel.Padding.Vertical + frameHeight;
 
-                panel.MinimumSize = new Size(width, panelHeight);
-                panel.MaximumSize = new Size(width, 0);
-                panel.Size = new Size(width, panelHeight);
+                Size panelMinimum = new Size(width, panelHeight);
+                Size panelMaximum = new Size(width, 0);
+                Size panelSize = new Size(width, panelHeight);
+                if (panel.MinimumSize != panelMinimum)
+                    panel.MinimumSize = panelMinimum;
+                if (panel.MaximumSize != panelMaximum)
+                    panel.MaximumSize = panelMaximum;
+                if (panel.Size != panelSize)
+                    panel.Size = panelSize;
             }
             finally
             {
@@ -3077,6 +3113,55 @@ namespace Jvdp.LightDarkroomOverlay
                     "Layout test hooks are only available in layout test mode.");
             return settingsPage != null &&
                 settingsPage.VerifyStaleUpdateRecoveryForLayoutTest();
+        }
+
+        internal bool VerifyTouchProfileEditingForLayoutTest()
+        {
+            if (!layoutTestMode)
+                throw new InvalidOperationException(
+                    "Layout test hooks are only available in layout test mode.");
+            return settingsPage != null &&
+                settingsPage.VerifyTouchProfileEditingForLayoutTest();
+        }
+
+        internal bool VerifyStableDashboardRefreshForLayoutTest()
+        {
+            if (!layoutTestMode)
+                throw new InvalidOperationException(
+                    "Layout test hooks are only available in layout test mode.");
+
+            lock (sensor.Sync)
+            {
+                sensor.Light = 63;
+                sensor.MappedIso = 1000;
+                sensor.CandidateSince = DateTime.MinValue;
+                sensor.SerialStatus = "COM123 connected";
+            }
+            lastJvdpLineAt = DateTime.Now;
+            RefreshUi();
+            PerformLayout();
+            dashboard.PerformLayout();
+
+            Rectangle mappingBefore = mappingPanel.Bounds;
+            Rectangle mappingContentBefore = mappingLayout.Bounds;
+            Rectangle metricsBefore = metrics.Bounds;
+            Rectangle profileBefore = profilePanel.Bounds;
+            Rectangle detailsBefore = detailsHeader.Bounds;
+            Rectangle actionBefore = actionPanel.Bounds;
+            int rangeChangesBefore =
+                rangeControl.DataChangeCountForLayoutTest;
+
+            for (int pass = 0; pass < 8; pass++)
+                RefreshUi();
+
+            return mappingPanel.Bounds == mappingBefore &&
+                mappingLayout.Bounds == mappingContentBefore &&
+                metrics.Bounds == metricsBefore &&
+                profilePanel.Bounds == profileBefore &&
+                detailsHeader.Bounds == detailsBefore &&
+                actionPanel.Bounds == actionBefore &&
+                rangeControl.DataChangeCountForLayoutTest ==
+                    rangeChangesBefore;
         }
 
         private static string BuildVersionFooterText(string localRoot)
@@ -4829,11 +4914,6 @@ namespace Jvdp.LightDarkroomOverlay
                 : (manualActionRunning
                     ? Color.FromArgb(137, 87, 0)
                     : Color.FromArgb(71, 78, 88));
-            LayoutMainChrome();
-            LayoutDashboardWidths();
-            FitTextControl(lastMeasuredLabel);
-            FitTextControl(detailsSummaryLabel);
-            FitTextControl(actionLabel);
         }
 
         private void UpdateHeaderStatus(
@@ -5334,6 +5414,10 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly RadioButton defaultProfile;
         private readonly RadioButton customProfile;
         private readonly DataGridView grid;
+        private readonly Panel bandEditorCard;
+        private readonly TableLayoutPanel bandRowsHost;
+        private readonly List<Label> touchRangeLabels =
+            new List<Label>();
         private readonly Button addButton;
         private readonly Button removeButton;
         private readonly Button saveButton;
@@ -5366,6 +5450,7 @@ namespace Jvdp.LightDarkroomOverlay
         private bool renderingCoverText;
         private bool showingCoverSettings;
         private bool rendering;
+        private bool renderingTouchEditors;
         private bool renderedCustom;
         private bool initialized;
         private bool dirty;
@@ -5628,7 +5713,28 @@ namespace Jvdp.LightDarkroomOverlay
             isoColumn.DataSource = supportedIsos;
             isoColumn.FlatStyle = FlatStyle.Flat;
             grid.Columns.Add(isoColumn);
-            Controls.Add(grid);
+            grid.Visible = false;
+
+            bandEditorCard = new Panel();
+            bandEditorCard.BackColor = Card;
+            bandEditorCard.BorderStyle = BorderStyle.FixedSingle;
+            bandEditorCard.AutoScroll = true;
+            bandEditorCard.AccessibleName =
+                "Touchvriendelijke lichtbereiken";
+
+            bandRowsHost = new TableLayoutPanel();
+            bandRowsHost.AutoSize = true;
+            bandRowsHost.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            bandRowsHost.Dock = DockStyle.Top;
+            bandRowsHost.ColumnCount = 1;
+            bandRowsHost.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            bandRowsHost.Padding = new Padding(12, 10, 12, 12);
+            bandRowsHost.AccessibleName =
+                "Grote aanraakbediening voor lichtbereiken";
+            bandEditorCard.Controls.Add(bandRowsHost);
+            bandEditorCard.Controls.Add(grid);
+            Controls.Add(bandEditorCard);
 
             addButton = MakeDialogButton("Bereik toevoegen", false);
             addButton.SetBounds(24, ClientSize.Height - 72, 150, 42);
@@ -6146,12 +6252,12 @@ namespace Jvdp.LightDarkroomOverlay
             title.Margin = new Padding(0, 5, 16, 4);
             isoSettingsTab.AutoSize = true;
             isoSettingsTab.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            isoSettingsTab.MinimumSize = new Size(118, 42);
+            isoSettingsTab.MinimumSize = new Size(132, 52);
             isoSettingsTab.Padding = new Padding(12, 0, 12, 0);
             isoSettingsTab.Margin = new Padding(0, 0, 8, 4);
             coverSettingsTab.AutoSize = true;
             coverSettingsTab.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            coverSettingsTab.MinimumSize = new Size(156, 42);
+            coverSettingsTab.MinimumSize = new Size(176, 52);
             coverSettingsTab.Padding = new Padding(12, 0, 12, 0);
             coverSettingsTab.Margin = new Padding(0, 0, 0, 4);
             navigation.Controls.Add(title);
@@ -6160,7 +6266,7 @@ namespace Jvdp.LightDarkroomOverlay
 
             updateButton.AutoSize = true;
             updateButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            updateButton.MinimumSize = new Size(200, 42);
+            updateButton.MinimumSize = new Size(216, 52);
             updateButton.Padding = new Padding(12, 0, 12, 0);
             updateButton.Margin = new Padding(16, 0, 0, 4);
 
@@ -6205,8 +6311,14 @@ namespace Jvdp.LightDarkroomOverlay
             profileModes.WrapContents = true;
             profileModes.Margin = Padding.Empty;
             defaultProfile.AutoSize = true;
+            defaultProfile.Font = new Font(
+                "Segoe UI", 11.5f, FontStyle.Bold);
+            defaultProfile.MinimumSize = new Size(0, 48);
             defaultProfile.Margin = new Padding(0, 2, 42, 4);
             customProfile.AutoSize = true;
+            customProfile.Font = new Font(
+                "Segoe UI", 11.5f, FontStyle.Bold);
+            customProfile.MinimumSize = new Size(0, 48);
             customProfile.Margin = new Padding(0, 2, 0, 4);
             profileModes.Controls.Add(defaultProfile);
             profileModes.Controls.Add(customProfile);
@@ -6229,14 +6341,37 @@ namespace Jvdp.LightDarkroomOverlay
             stability.WrapContents = false;
             stability.Margin = Padding.Empty;
             stabilityCaption.AutoSize = true;
-            stabilityCaption.Margin = new Padding(0, 8, 10, 0);
-            stabilitySecondsInput.AutoSize = true;
-            stabilitySecondsInput.MinimumSize = new Size(68, 0);
-            stabilitySecondsInput.Height =
-                stabilitySecondsInput.PreferredHeight;
-            stabilitySecondsInput.Margin = new Padding(0, 4, 0, 0);
+            stabilityCaption.Font = new Font(
+                "Segoe UI", 10.5f, FontStyle.Bold);
+            stabilityCaption.Margin = new Padding(0, 14, 12, 0);
+            Button stabilityMinus = MakeTouchStepButton(
+                "−", "Vijf seconden minder");
+            stabilityMinus.Click += delegate
+            {
+                decimal value = Math.Max(
+                    stabilitySecondsInput.Minimum,
+                    stabilitySecondsInput.Value - 5);
+                stabilitySecondsInput.Value = value;
+            };
+            stabilitySecondsInput.AutoSize = false;
+            stabilitySecondsInput.Font = new Font(
+                "Segoe UI", 14, FontStyle.Bold);
+            stabilitySecondsInput.MinimumSize = new Size(96, 52);
+            stabilitySecondsInput.Height = 54;
+            stabilitySecondsInput.Margin = new Padding(8, 0, 8, 0);
+            Button stabilityPlus = MakeTouchStepButton(
+                "+", "Vijf seconden meer");
+            stabilityPlus.Click += delegate
+            {
+                decimal value = Math.Min(
+                    stabilitySecondsInput.Maximum,
+                    stabilitySecondsInput.Value + 5);
+                stabilitySecondsInput.Value = value;
+            };
             stability.Controls.Add(stabilityCaption);
+            stability.Controls.Add(stabilityMinus);
             stability.Controls.Add(stabilitySecondsInput);
+            stability.Controls.Add(stabilityPlus);
             profileLayout.Controls.Add(stability, 1, 1);
             profileCard.Controls.Add(profileLayout);
 
@@ -6264,11 +6399,29 @@ namespace Jvdp.LightDarkroomOverlay
             previewCaption.AutoSize = true;
             previewCaption.Margin = new Padding(0, 6, 28, 0);
             previewLightCaption.AutoSize = true;
-            previewLightCaption.Margin = new Padding(0, 7, 8, 0);
-            previewLightInput.AutoSize = true;
-            previewLightInput.MinimumSize = new Size(70, 0);
-            previewLightInput.Height = previewLightInput.PreferredHeight;
-            previewLightInput.Margin = new Padding(0, 3, 18, 0);
+            previewLightCaption.Margin = new Padding(0, 14, 10, 0);
+            Button previewMinus = MakeTouchStepButton(
+                "−", "Voorbeeldlichtwaarde één lager");
+            previewMinus.Click += delegate
+            {
+                previewLightInput.Value = Math.Max(
+                    previewLightInput.Minimum,
+                    previewLightInput.Value - 1);
+            };
+            previewLightInput.AutoSize = false;
+            previewLightInput.Font = new Font(
+                "Segoe UI", 14, FontStyle.Bold);
+            previewLightInput.MinimumSize = new Size(92, 52);
+            previewLightInput.Height = 54;
+            previewLightInput.Margin = new Padding(8, 0, 8, 0);
+            Button previewPlus = MakeTouchStepButton(
+                "+", "Voorbeeldlichtwaarde één hoger");
+            previewPlus.Click += delegate
+            {
+                previewLightInput.Value = Math.Min(
+                    previewLightInput.Maximum,
+                    previewLightInput.Value + 1);
+            };
             previewText.AutoSize = true;
             previewText.AutoEllipsis = false;
             previewText.Anchor = AnchorStyles.Top |
@@ -6281,14 +6434,27 @@ namespace Jvdp.LightDarkroomOverlay
             previewRange.Margin = Padding.Empty;
             previewLayout.Controls.Add(previewCaption, 0, 0);
             previewLayout.Controls.Add(previewLightCaption, 1, 0);
-            previewLayout.Controls.Add(previewLightInput, 2, 0);
+            FlowLayoutPanel previewStepper = new FlowLayoutPanel();
+            previewStepper.AutoSize = true;
+            previewStepper.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            previewStepper.FlowDirection = FlowDirection.LeftToRight;
+            previewStepper.WrapContents = false;
+            previewStepper.Margin = Padding.Empty;
+            previewStepper.Controls.Add(previewMinus);
+            previewStepper.Controls.Add(previewLightInput);
+            previewStepper.Controls.Add(previewPlus);
+            previewLayout.Controls.Add(previewStepper, 2, 0);
             previewLayout.Controls.Add(previewText, 3, 0);
             previewLayout.Controls.Add(previewRange, 0, 1);
             previewLayout.SetColumnSpan(previewRange, 4);
             previewCard.Controls.Add(previewLayout);
 
-            grid.Dock = DockStyle.Fill;
-            grid.Margin = new Padding(0, 0, 0, 10);
+            bandEditorCard.Dock = DockStyle.Fill;
+            // This row receives the remaining height. A compact minimum keeps
+            // the fixed footer reachable on short Surface viewports, while the
+            // card's own scrollbar exposes every large touch row.
+            bandEditorCard.MinimumSize = new Size(0, 72);
+            bandEditorCard.Margin = new Padding(0, 0, 0, 12);
 
             TableLayoutPanel footer = new TableLayoutPanel();
             footer.AutoSize = true;
@@ -6310,15 +6476,10 @@ namespace Jvdp.LightDarkroomOverlay
             rangeActions.WrapContents = false;
             rangeActions.Margin = Padding.Empty;
             addButton.AutoSize = true;
-            addButton.MinimumSize = new Size(150, 42);
+            addButton.MinimumSize = new Size(180, 54);
             addButton.Padding = new Padding(10, 0, 10, 0);
             addButton.Margin = new Padding(0, 0, 8, 0);
-            removeButton.AutoSize = true;
-            removeButton.MinimumSize = new Size(158, 42);
-            removeButton.Padding = new Padding(10, 0, 10, 0);
-            removeButton.Margin = Padding.Empty;
             rangeActions.Controls.Add(addButton);
-            rangeActions.Controls.Add(removeButton);
 
             FlowLayoutPanel saveActions = new FlowLayoutPanel();
             saveActions.AutoSize = true;
@@ -6327,11 +6488,11 @@ namespace Jvdp.LightDarkroomOverlay
             saveActions.WrapContents = false;
             saveActions.Margin = Padding.Empty;
             cancelButton.AutoSize = true;
-            cancelButton.MinimumSize = new Size(120, 42);
+            cancelButton.MinimumSize = new Size(140, 54);
             cancelButton.Padding = new Padding(14, 0, 14, 0);
             cancelButton.Margin = new Padding(0, 0, 8, 0);
             saveButton.AutoSize = true;
-            saveButton.MinimumSize = new Size(140, 42);
+            saveButton.MinimumSize = new Size(160, 54);
             saveButton.Padding = new Padding(14, 0, 14, 0);
             saveButton.Margin = Padding.Empty;
             saveActions.Controls.Add(saveButton);
@@ -6390,7 +6551,7 @@ namespace Jvdp.LightDarkroomOverlay
             root.Controls.Add(header, 0, 0);
             root.Controls.Add(profileCard, 0, 1);
             root.Controls.Add(previewCard, 0, 2);
-            root.Controls.Add(grid, 0, 3);
+            root.Controls.Add(bandEditorCard, 0, 3);
             root.Controls.Add(coverSettingsPanel, 0, 1);
             root.SetRowSpan(coverSettingsPanel, 3);
             root.Controls.Add(footer, 0, 4);
@@ -6607,6 +6768,50 @@ namespace Jvdp.LightDarkroomOverlay
             return recovered;
         }
 
+        internal bool VerifyTouchProfileEditingForLayoutTest()
+        {
+            if (!customProfile.Checked)
+                customProfile.Checked = true;
+            RenderRows();
+            if (CustomBands.Count < 2 || bandRowsHost.Controls.Count < 3)
+                return false;
+
+            TableLayoutPanel firstRow =
+                bandRowsHost.GetControlFromPosition(0, 1)
+                    as TableLayoutPanel;
+            if (firstRow == null)
+                return false;
+            TextBox maximumInput = null;
+            ComboBox isoInput = null;
+            foreach (Control control in firstRow.Controls)
+            {
+                if (maximumInput == null)
+                    maximumInput = control as TextBox;
+                if (isoInput == null)
+                    isoInput = control as ComboBox;
+            }
+            if (maximumInput == null || isoInput == null ||
+                isoInput.Items.Count < 2)
+                return false;
+
+            int originalMaximum = CustomBands[0].MaximumLight;
+            int originalIso = CustomBands[0].Iso;
+            maximumInput.Text = (originalMaximum + 1).ToString();
+            bool maximumChanged =
+                CustomBands[0].MaximumLight == originalMaximum + 1 &&
+                Convert.ToInt32(grid.Rows[1].Cells[0].Value) ==
+                    originalMaximum + 2;
+
+            maximumInput.Text = originalMaximum.ToString();
+            int alternativeIndex = isoInput.SelectedIndex == 0 ? 1 : 0;
+            isoInput.SelectedIndex = alternativeIndex;
+            bool isoChanged = CustomBands[0].Iso ==
+                (int)isoInput.SelectedItem;
+            CustomBands[0].Iso = originalIso;
+            RenderRows();
+            return maximumChanged && isoChanged;
+        }
+
         private void SetUpdateButtonState(
             string text, Color color, bool enabled, string description)
         {
@@ -6660,7 +6865,10 @@ namespace Jvdp.LightDarkroomOverlay
             showingCoverSettings = fullpage;
             profileCard.Visible = !fullpage;
             previewCard.Visible = !fullpage;
-            grid.Visible = !fullpage;
+            // The grid remains an internal data model. The visible editor uses
+            // large touch controls instead of tiny cells and drop-down arrows.
+            grid.Visible = false;
+            bandEditorCard.Visible = !fullpage;
             coverSettingsPanel.Visible = fullpage;
             if (fullpage)
             {
@@ -6700,6 +6908,15 @@ namespace Jvdp.LightDarkroomOverlay
                 if (coverMessageInput.Text.Length < 240)
                     coverMessageInput.Text = coverMessageInput.Text.PadRight(
                         240, '.');
+            }
+            else
+            {
+                // Exercise the shared six-range production default in every
+                // settings matrix case, independent of this PC's saved booth
+                // profile.
+                CustomBands = CloneBands(defaultBands);
+                customProfile.Checked = true;
+                RenderRows();
             }
             ShowSettingsSection(fullpage);
             EnsureTextFitsWithinBounds();
@@ -6856,17 +7073,296 @@ namespace Jvdp.LightDarkroomOverlay
                 addButton.Visible = custom && !showingCoverSettings;
                 removeButton.Visible = custom && !showingCoverSettings;
                 explanation.Text = custom
-                    ? "Dit profiel wordt alleen op deze booth opgeslagen. " +
-                      "De bereiken sluiten automatisch op elkaar aan."
+                    ? "Gebruik de grote − en + knoppen. De bereiken sluiten " +
+                      "automatisch op elkaar aan."
                     : "Dit standaardprofiel wordt vanuit de centrale " +
                       "software-update voor alle booths beheerd.";
                 grid.ClearSelection();
+                RenderTouchBandEditors(source, custom);
                 UpdatePreview();
             }
             finally
             {
                 rendering = false;
             }
+        }
+
+        private void RenderTouchBandEditors(
+            List<IsoBand> source, bool custom)
+        {
+            renderingTouchEditors = true;
+            bandRowsHost.SuspendLayout();
+            try
+            {
+                bandRowsHost.Controls.Clear();
+                bandRowsHost.RowStyles.Clear();
+                touchRangeLabels.Clear();
+                bandRowsHost.RowCount = source.Count + 1;
+
+                Label heading = MakeDialogLabel(
+                    custom
+                        ? "Lichtbereiken aanpassen"
+                        : "Standaard lichtbereiken",
+                    12.5f, FontStyle.Bold, TextPrimary);
+                heading.AutoSize = true;
+                heading.Margin = new Padding(4, 0, 4, 10);
+                bandRowsHost.Controls.Add(heading, 0, 0);
+                bandRowsHost.RowStyles.Add(
+                    new RowStyle(SizeType.AutoSize));
+
+                int lower = 0;
+                for (int index = 0; index < source.Count; index++)
+                {
+                    int rowIndex = index;
+                    IsoBand band = source[index];
+                    TableLayoutPanel row = new TableLayoutPanel();
+                    row.AutoSize = true;
+                    row.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                    row.Dock = DockStyle.Top;
+                    row.BackColor = index % 2 == 0
+                        ? Color.FromArgb(250, 251, 252)
+                        : Card;
+                    row.Margin = new Padding(0, 0, 0, 8);
+                    row.Padding = new Padding(10, 8, 10, 8);
+                    row.ColumnCount = 8;
+                    row.RowCount = 1;
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.Percent, 100));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.ColumnStyles.Add(
+                        new ColumnStyle(SizeType.AutoSize));
+                    row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                    row.AccessibleName = "Lichtbereik " + (index + 1);
+
+                    Label rangeLabel = MakeDialogLabel(
+                        lower + "–" + band.MaximumLight,
+                        13, FontStyle.Bold, TextPrimary);
+                    rangeLabel.AutoSize = true;
+                    rangeLabel.MinimumSize = new Size(90, 54);
+                    rangeLabel.TextAlign = ContentAlignment.MiddleLeft;
+                    rangeLabel.Margin = new Padding(0, 0, 12, 0);
+                    rangeLabel.AccessibleName =
+                        "Grenzen van lichtbereik " + (index + 1);
+
+                    Button decrease = MakeTouchStepButton(
+                        "−", "Eindwaarde van bereik " +
+                        (index + 1) + " één lager");
+                    decrease.Enabled = custom && index < source.Count - 1;
+
+                    TextBox maximumInput = new TextBox();
+                    maximumInput.Text = band.MaximumLight.ToString();
+                    maximumInput.Font = new Font(
+                        "Segoe UI", 16, FontStyle.Bold);
+                    maximumInput.TextAlign = HorizontalAlignment.Center;
+                    maximumInput.Multiline = true;
+                    maximumInput.MinimumSize = new Size(94, 54);
+                    maximumInput.Size = new Size(94, 54);
+                    maximumInput.Height = 54;
+                    maximumInput.Margin = new Padding(8, 0, 8, 0);
+                    maximumInput.ReadOnly = !custom ||
+                        index == source.Count - 1;
+                    maximumInput.AccessibleName =
+                        "Eindwaarde van lichtbereik " + (index + 1);
+                    touchRangeLabels.Add(rangeLabel);
+
+                    Button increase = MakeTouchStepButton(
+                        "+", "Eindwaarde van bereik " +
+                        (index + 1) + " één hoger");
+                    increase.Enabled = custom && index < source.Count - 1;
+
+                    Label isoCaption = MakeDialogLabel(
+                        "wordt ISO", 10.5f, FontStyle.Regular, TextMuted);
+                    isoCaption.AutoSize = true;
+                    isoCaption.MinimumSize = new Size(82, 54);
+                    isoCaption.TextAlign = ContentAlignment.MiddleRight;
+                    isoCaption.Margin = new Padding(14, 0, 12, 0);
+
+                    ComboBox isoInput = new ComboBox();
+                    isoInput.DropDownStyle = ComboBoxStyle.DropDownList;
+                    isoInput.Font = new Font(
+                        "Segoe UI", 16, FontStyle.Bold);
+                    isoInput.IntegralHeight = false;
+                    isoInput.DropDownHeight = 300;
+                    isoInput.DrawMode = DrawMode.OwnerDrawFixed;
+                    isoInput.ItemHeight = 44;
+                    isoInput.MinimumSize = new Size(142, 54);
+                    isoInput.Width = 142;
+                    isoInput.Margin = Padding.Empty;
+                    isoInput.Enabled = custom;
+                    isoInput.AccessibleName =
+                        "Darkroom ISO voor lichtbereik " + (index + 1);
+                    foreach (int supportedIso in supportedIsos)
+                        isoInput.Items.Add(supportedIso);
+                    isoInput.SelectedItem = band.Iso;
+                    isoInput.DrawItem += delegate(object sender,
+                        DrawItemEventArgs draw)
+                    {
+                        draw.DrawBackground();
+                        if (draw.Index >= 0 &&
+                            draw.Index < isoInput.Items.Count)
+                        {
+                            TextRenderer.DrawText(
+                                draw.Graphics,
+                                isoInput.Items[draw.Index].ToString(),
+                                isoInput.Font,
+                                draw.Bounds,
+                                isoInput.ForeColor,
+                                TextFormatFlags.Left |
+                                TextFormatFlags.VerticalCenter |
+                                TextFormatFlags.NoPrefix);
+                        }
+                        draw.DrawFocusRectangle();
+                    };
+
+                    Button delete = MakeDialogButton(
+                        "Verwijder", false);
+                    delete.AutoSize = true;
+                    delete.MinimumSize = new Size(116, 54);
+                    delete.Font = new Font(
+                        "Segoe UI", 10.5f, FontStyle.Bold);
+                    delete.Margin = new Padding(12, 0, 0, 0);
+                    delete.Visible = custom;
+                    delete.Enabled = custom && source.Count > 1;
+                    delete.AccessibleName =
+                        "Lichtbereik " + (index + 1) + " verwijderen";
+
+                    decrease.Click += delegate
+                    {
+                        int value;
+                        if (!Int32.TryParse(maximumInput.Text, out value))
+                            value = CustomBands[rowIndex].MaximumLight;
+                        int minimum = rowIndex == 0 ? 0 :
+                            CustomBands[rowIndex - 1].MaximumLight + 1;
+                        if (value > minimum)
+                            maximumInput.Text = (value - 1).ToString();
+                    };
+                    increase.Click += delegate
+                    {
+                        int value;
+                        if (!Int32.TryParse(maximumInput.Text, out value))
+                            value = CustomBands[rowIndex].MaximumLight;
+                        int maximum = rowIndex < CustomBands.Count - 1
+                            ? CustomBands[rowIndex + 1].MaximumLight - 1
+                            : 100;
+                        if (value < maximum)
+                            maximumInput.Text = (value + 1).ToString();
+                    };
+                    maximumInput.KeyPress += delegate(object sender,
+                        KeyPressEventArgs key)
+                    {
+                        if (!Char.IsControl(key.KeyChar) &&
+                            !Char.IsDigit(key.KeyChar))
+                            key.Handled = true;
+                    };
+                    maximumInput.Enter += delegate
+                    {
+                        maximumInput.SelectAll();
+                    };
+                    maximumInput.TextChanged += delegate
+                    {
+                        int parsed;
+                        if (Int32.TryParse(maximumInput.Text, out parsed))
+                            ApplyTouchMaximum(rowIndex, parsed);
+                    };
+                    maximumInput.Leave += delegate
+                    {
+                        if (rowIndex < CustomBands.Count)
+                            maximumInput.Text =
+                                CustomBands[rowIndex].MaximumLight.ToString();
+                    };
+                    isoInput.SelectedIndexChanged += delegate
+                    {
+                        if (isoInput.SelectedItem != null)
+                            ApplyTouchIso(rowIndex,
+                                (int)isoInput.SelectedItem);
+                    };
+                    delete.Click += delegate
+                    {
+                        RemoveRangeAt(rowIndex);
+                    };
+
+                    row.Controls.Add(rangeLabel, 0, 0);
+                    row.Controls.Add(decrease, 1, 0);
+                    row.Controls.Add(maximumInput, 2, 0);
+                    row.Controls.Add(increase, 3, 0);
+                    row.Controls.Add(isoCaption, 4, 0);
+                    row.Controls.Add(new Panel(), 5, 0);
+                    row.Controls.Add(isoInput, 6, 0);
+                    row.Controls.Add(delete, 7, 0);
+                    bandRowsHost.Controls.Add(row, 0, index + 1);
+                    bandRowsHost.RowStyles.Add(
+                        new RowStyle(SizeType.AutoSize));
+                    lower = band.MaximumLight + 1;
+                }
+            }
+            finally
+            {
+                bandRowsHost.ResumeLayout(true);
+                renderingTouchEditors = false;
+            }
+        }
+
+        private void ApplyTouchMaximum(int rowIndex, int maximum)
+        {
+            if (renderingTouchEditors || !customProfile.Checked ||
+                rowIndex < 0 || rowIndex >= grid.Rows.Count - 1)
+                return;
+            int minimum = rowIndex == 0 ? 0 :
+                CustomBands[rowIndex - 1].MaximumLight + 1;
+            int allowedMaximum =
+                CustomBands[rowIndex + 1].MaximumLight - 1;
+            if (maximum < minimum || maximum > allowedMaximum)
+                return;
+            grid.Rows[rowIndex].Cells[1].Value = maximum;
+            grid.Rows[rowIndex + 1].Cells[0].Value = maximum + 1;
+            if (!CaptureCustomBands(false))
+                return;
+            int lower = 0;
+            for (int index = 0;
+                index < CustomBands.Count &&
+                index < touchRangeLabels.Count; index++)
+            {
+                touchRangeLabels[index].Text = lower + "–" +
+                    CustomBands[index].MaximumLight;
+                lower = CustomBands[index].MaximumLight + 1;
+            }
+            UpdatePreview();
+            MarkDirty();
+        }
+
+        private void ApplyTouchIso(int rowIndex, int iso)
+        {
+            if (renderingTouchEditors || !customProfile.Checked ||
+                rowIndex < 0 || rowIndex >= grid.Rows.Count)
+                return;
+            grid.Rows[rowIndex].Cells[2].Value = iso;
+            if (!CaptureCustomBands(false))
+                return;
+            UpdatePreview();
+            MarkDirty();
+        }
+
+        private void RemoveRangeAt(int rowIndex)
+        {
+            if (!customProfile.Checked || !CaptureCustomBands(true) ||
+                CustomBands.Count <= 1 || rowIndex < 0 ||
+                rowIndex >= CustomBands.Count)
+                return;
+            CustomBands.RemoveAt(rowIndex);
+            CustomBands[CustomBands.Count - 1].MaximumLight = 100;
+            RenderRows();
+            MarkDirty();
         }
 
         private bool CaptureCustomBands(bool showError)
@@ -6990,15 +7486,29 @@ namespace Jvdp.LightDarkroomOverlay
         {
             Button button = new Button();
             button.Text = text;
-            button.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            button.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             button.FlatStyle = FlatStyle.Flat;
             button.FlatAppearance.BorderSize = primary ? 0 : 1;
             button.FlatAppearance.BorderColor = Accent;
             button.BackColor = primary ? Accent : Card;
             button.ForeColor = primary ? Color.White : Accent;
             button.UseVisualStyleBackColor = false;
-            button.MinimumSize = new Size(44, 42);
+            button.MinimumSize = new Size(48, 48);
             button.AccessibleRole = AccessibleRole.PushButton;
+            return button;
+        }
+
+        private static Button MakeTouchStepButton(
+            string text, string accessibleName)
+        {
+            Button button = MakeDialogButton(text, false);
+            button.AutoSize = false;
+            button.Size = new Size(54, 54);
+            button.MinimumSize = new Size(54, 54);
+            button.MaximumSize = new Size(54, 54);
+            button.Font = new Font("Segoe UI", 18, FontStyle.Bold);
+            button.Margin = Padding.Empty;
+            button.AccessibleName = accessibleName;
             return button;
         }
     }

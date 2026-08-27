@@ -238,10 +238,21 @@ namespace Jvdp.LayoutTests
                         "Navigatieknop 'Terug naar dashboard' ontbreekt.");
                 if (!headlessMode)
                     SaveControlBitmap(form, result.Path, statusOverlay);
+                if (state == "dashboard" &&
+                    !form.VerifyStableDashboardRefreshForLayoutTest())
+                    result.Issues.Add(
+                        "Herhaalde identieke statusupdates wijzigen nog steeds de dashboardlayout.");
                 if (state == "licht-en-iso" &&
                     !form.VerifyStaleUpdateRecoveryForLayoutTest())
                     result.Issues.Add(
                         "Een vastgelopen bestaande updatestatus wordt niet opnieuw probeerbaar.");
+                if (state == "licht-en-iso")
+                {
+                    ValidateTouchProfileEditor(form, result.Issues);
+                    if (!form.VerifyTouchProfileEditingForLayoutTest())
+                        result.Issues.Add(
+                            "De grote grens- of ISO-bediening wijzigt het profiel niet correct.");
+                }
                 form.Close();
                 if (!headlessMode)
                     Application.DoEvents();
@@ -759,6 +770,58 @@ namespace Jvdp.LayoutTests
                     issues.Add("Meetwaarde valt buiten zijn parent: " +
                         name + ".");
             }
+        }
+
+        private static void ValidateTouchProfileEditor(
+            Control root, List<string> issues)
+        {
+            Panel card = FindControlByAccessibleName(
+                root, "Touchvriendelijke lichtbereiken") as Panel;
+            if (card == null || !IsVisibleForValidation(card, root))
+            {
+                issues.Add(
+                    "De touchvriendelijke editor voor lichtbereiken ontbreekt.");
+                return;
+            }
+
+            int rowCount = 0;
+            int editableCount = 0;
+            Queue<Control> queue = new Queue<Control>();
+            queue.Enqueue(card);
+            while (queue.Count > 0)
+            {
+                Control control = queue.Dequeue();
+                if (control.AccessibleName != null &&
+                    control.AccessibleName.StartsWith(
+                        "Lichtbereik ", StringComparison.Ordinal) &&
+                    control is TableLayoutPanel)
+                    rowCount++;
+                bool touchInput = control is Button ||
+                    control is NumericUpDown || control is TextBox ||
+                    control is ComboBox;
+                if (touchInput && control.Enabled &&
+                    IsVisibleForValidation(control, root))
+                {
+                    editableCount++;
+                    float scale = Math.Max(1f, control.DeviceDpi / 96f);
+                    int minimumPixels = (int)Math.Floor(48 * scale);
+                    if (control.ClientSize.Height + 2 < minimumPixels)
+                        issues.Add(String.Format(
+                            "Touchbediening is te laag: {0} '{1}' heeft {2}px, minimaal {3}px.",
+                            control.GetType().Name, SafeText(control.Text),
+                            control.ClientSize.Height, minimumPixels));
+                }
+                foreach (Control child in control.Controls)
+                    queue.Enqueue(child);
+            }
+            if (rowCount != 6)
+                issues.Add(String.Format(
+                    "De standaard touch-editor toont {0} in plaats van 6 bereiken.",
+                    rowCount));
+            if (editableCount < 24)
+                issues.Add(String.Format(
+                    "De touch-editor bevat te weinig grote directe bedieningen: {0}.",
+                    editableCount));
         }
 
         private static CaptureResult CaptureRangeDpiRegression()

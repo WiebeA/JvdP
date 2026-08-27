@@ -1,9 +1,10 @@
-# Design QA — JvdP Lichtregeling 24.5.6
+# Design QA — JvdP Lichtregeling 24.5.7
 
 ## Audit health
 
-Final result: passed. No actionable P0, P1 or P2 layout issue remains in the
-tested matrix.
+Final result: passed. The dashboard refresh is stable and the profile editor is
+touch-friendly. No actionable P0, P1 or P2 layout issue remains in the tested
+matrix.
 
 ## Evidence and scope
 
@@ -11,8 +12,10 @@ tested matrix.
   `artifacts/audit-dashboard-clipping-20260827/01-dashboard-metrics-clipping.png`.
 - Side-by-side visual comparison:
   `artifacts/audit-dashboard-clipping-20260827/02-before-after-v24.5.6.png`.
+- Video evidence for the original dashboard flash:
+  `artifacts/audit-dashboard-flash-20260827/02-flicker-sequence.png`.
 - Automated and rendered implementation evidence:
-  `artifacts/layout-matrix-24.5.6-final/`.
+  `artifacts/layout-matrix-24.5.7-surface-final/`.
 - Exact client sizes: 1000×720, 1024×768, 1100×720, 1180×760, 1240×820,
   1280×720, 1366×768, 1440×900, 1600×900 and 1920×1080.
 - Six states per size: dashboard, expanded technical details, open status panel,
@@ -23,12 +26,32 @@ tested matrix.
   parent, text that does not fit, UI fonts below 8.5 pt, undersized grid rows and
   range labels that do not fit at the readable minimum. Dashboard tests use the
   deliberately difficult values `100`, `85–100` and `25600`.
+- Eight identical dashboard refreshes are executed per tested size. The test
+  rejects any changed dashboard card bounds or needless range-control redraw,
+  which directly guards against the half-second blanking seen in the video.
+- The profile test changes a range boundary and an ISO through the visible touch
+  controls, verifies the underlying six-range profile, and restores the values.
 - The status case additionally proves that the modal panel is visible, completely
   inside the client area and above the dashboard in the z-order.
 - Settings and full-screen cases use deliberately long booth, status, title and
   message strings to exercise wrapping and scrolling.
 
 ## Findings and implementation
+
+- The dashboard flash was reproduced from the supplied video. Its repeated
+  blank frames matched the 500 ms UI timer exactly. Each tick reset the card
+  minimum and maximum sizes to empty, performed a full layout and then restored
+  them, exposing the collapsed intermediate state to Windows.
+- Status refreshes now update data only. Layout is recalculated only after an
+  actual resize or text/structure change. Content-driven cards are idempotent
+  and the light-range control skips repainting when its data did not change.
+- The profile grid has been replaced visually by six large touch rows. Each row
+  has 54 px minus/plus targets, a large direct numeric field, a large ISO picker
+  and its own remove action. Tapping a numeric field selects the current value,
+  so a replacement can be typed immediately on a Surface.
+- Stability time and preview light value now also have large minus/plus controls.
+  The editor card scrolls independently on short viewports, while Save, Back and
+  Add range remain fixed and reachable.
 
 - The reported defect was reproduced at 1920×1080 and 144 DPI: Windows requested
   88 px for a large metric label while its fixed row supplied only 83 px. The
