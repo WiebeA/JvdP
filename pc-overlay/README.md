@@ -12,7 +12,7 @@ the application completely.
 The current build version comes from the repository VERSION file. It controls Darkroom without coordinates, cursor movement, mouse clicks, DOM or MSAA.
 
 Automatic mode is the default. Once the PC-mapped target has remained unchanged for
-the configured stability period (30 seconds by default) and Darkroom Booth is
+the configured stability period (60 seconds by default) and Darkroom Booth is
 running, the application automatically performs the following flow. It starts Booth
 Mode when the flow is finished. `RUN NOW (MANUAL)` remains available as an
 immediate override.

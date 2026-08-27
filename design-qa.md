@@ -1,4 +1,4 @@
-# Design QA — JvdP Lichtregeling 24.5.5
+# Design QA — JvdP Lichtregeling 24.5.6
 
 ## Audit health
 
@@ -8,10 +8,11 @@ tested matrix.
 ## Evidence and scope
 
 - Original problem evidence:
-  `artifacts/audit-range-clipping-20260827/01-booth-settings-clipping.png`
-  and `02-range-clipping-detail.png`.
+  `artifacts/audit-dashboard-clipping-20260827/01-dashboard-metrics-clipping.png`.
+- Side-by-side visual comparison:
+  `artifacts/audit-dashboard-clipping-20260827/02-before-after-v24.5.6.png`.
 - Automated and rendered implementation evidence:
-  `artifacts/layout-matrix-24.5.5-final/`.
+  `artifacts/layout-matrix-24.5.6-final/`.
 - Exact client sizes: 1000×720, 1024×768, 1100×720, 1180×760, 1240×820,
   1280×720, 1366×768, 1440×900, 1600×900 and 1920×1080.
 - Six states per size: dashboard, expanded technical details, open status panel,
@@ -20,7 +21,8 @@ tested matrix.
   a geometry regression at 100%, 125%, 150%, 175% and 200% DPI scaling.
 - The automated checks reject sibling intersections, controls outside a fixed
   parent, text that does not fit, UI fonts below 8.5 pt, undersized grid rows and
-  range labels that do not fit at the readable minimum.
+  range labels that do not fit at the readable minimum. Dashboard tests use the
+  deliberately difficult values `100`, `85–100` and `25600`.
 - The status case additionally proves that the modal panel is visible, completely
   inside the client area and above the dashboard in the z-order.
 - Settings and full-screen cases use deliberately long booth, status, title and
@@ -28,9 +30,19 @@ tested matrix.
 
 ## Findings and implementation
 
-- Dashboard surfaces now resize from their measured child bounds. Increasing the
-  window and its type no longer leaves the light metrics, active profile or
-  technical status controls inside a stale fixed-height parent.
+- The reported defect was reproduced at 1920×1080 and 144 DPI: Windows requested
+  88 px for a large metric label while its fixed row supplied only 83 px. The
+  lower five pixels were therefore guaranteed to be clipped.
+- Dashboard cards now use nested AutoSize table layouts. Every text row contributes
+  its own preferred height to its parent, and the outer dashboard scrolls when the
+  viewport is shorter than the content. No dashboard text row uses a fixed or
+  percentage height anymore.
+- Responsive typography changes only fonts and horizontal constraints. It no
+  longer writes stale `Top` or `Height` values back into the new dashboard tree.
+- The regression compares every large metric label against WinForms'
+  `Label.GetPreferredSize()` result and rejects a card whose client area is smaller
+  than its content. This matches the renderer used on the booths instead of the
+  earlier optimistic no-padding text estimate.
 - Profile labels receive measured vertical spacing; the caption and selected
   profile cannot occupy the same pixels.
 - Technical details and the status panel use content-driven table layouts with
@@ -57,6 +69,11 @@ tested matrix.
   replaces that configuration together with the application executable.
 - The same 10-size matrix runs on every main-branch build and before every tagged
   release, so a later overlap or truncation blocks publication.
+
+## Default stability period
+
+When no booth-specific value has been saved, the automatic ISO stability period
+is now 60 seconds. A deliberately saved value remains intact during an update.
 
 ## Default light mapping
 

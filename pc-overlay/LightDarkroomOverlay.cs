@@ -684,6 +684,7 @@ namespace Jvdp.LightDarkroomOverlay
         private const string DefaultCoverTitle = "Please wait!";
         private const string DefaultCoverMessage =
             "I'm fine-tuning the lighting\r\nso you look absolutely amazing!";
+        private const int DefaultStabilitySeconds = 60;
         private const uint EventSystemForeground = 0x0003;
         private const uint EventSystemPopupStart = 0x0006;
         private const uint EventObjectShow = 0x8002;
@@ -743,10 +744,13 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly TableLayoutPanel metrics;
         private readonly FlowLayoutPanel dashboard;
         private readonly Panel mappingPanel;
+        private readonly TableLayoutPanel mappingLayout;
         private readonly Label mappingTitleLabel;
         private readonly Panel profilePanel;
+        private readonly TableLayoutPanel dashboardProfileLayout;
         private readonly Label profileCaptionLabel;
         private readonly Panel detailsHeader;
+        private readonly TableLayoutPanel detailsHeaderLayout;
         private readonly TableLayoutPanel actionPanel;
         private readonly Panel mainHeaderPanel;
         private readonly Label mainTitleLabel;
@@ -776,7 +780,7 @@ namespace Jvdp.LightDarkroomOverlay
         private string manualActionStatus = "";
         private DateTime manualActionStatusUntil = DateTime.MinValue;
         private DateTime nextAutomaticAttemptAt = DateTime.MinValue;
-        private int stabilitySeconds = 30;
+        private int stabilitySeconds = DefaultStabilitySeconds;
         private string currentDarkroomIso = "Unknown";
         private DateTime currentIsoReadAt = DateTime.MinValue;
         private bool darkroomRunning;
@@ -820,12 +824,6 @@ namespace Jvdp.LightDarkroomOverlay
             new Dictionary<Control, float>();
         private readonly Dictionary<Control, float> textFitBaseFontSizes =
             new Dictionary<Control, float>();
-        private readonly Dictionary<Control, Rectangle>
-            responsiveDashboardBounds =
-                new Dictionary<Control, Rectangle>();
-        private readonly Dictionary<Control, Padding>
-            responsiveDashboardMargins =
-                new Dictionary<Control, Padding>();
         private float lastResponsiveScale = -1f;
         private float lastResponsiveDpiScale = -1f;
         private bool textFitActive;
@@ -1041,82 +1039,141 @@ namespace Jvdp.LightDarkroomOverlay
             Controls.Add(versionFooterLabel);
 
             int sectionWidth = Math.Max(640, dashboard.ClientSize.Width - 68);
-            mappingPanel = MakeLightSurface(sectionWidth, 264);
+            mappingPanel = MakeLightSurface(sectionWidth, 1);
+            mappingPanel.AutoSize = true;
+            mappingPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            mappingPanel.AccessibleName =
+                "Live lichtwaarde en ISO-overzicht";
             mappingPanel.Margin = new Padding(0, 0, 0, 12);
             dashboard.Controls.Add(mappingPanel);
+
+            mappingLayout = new TableLayoutPanel();
+            mappingLayout.AutoSize = true;
+            mappingLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            mappingLayout.Dock = DockStyle.Top;
+            mappingLayout.Margin = Padding.Empty;
+            mappingLayout.Padding = new Padding(20, 12, 20, 16);
+            mappingLayout.ColumnCount = 1;
+            mappingLayout.RowCount = 3;
+            mappingLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            mappingLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mappingLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mappingLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mappingPanel.Controls.Add(mappingLayout);
+
+            TableLayoutPanel mappingHeader = new TableLayoutPanel();
+            mappingHeader.AutoSize = true;
+            mappingHeader.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            mappingHeader.Dock = DockStyle.Fill;
+            mappingHeader.Margin = Padding.Empty;
+            mappingHeader.ColumnCount = 2;
+            mappingHeader.RowCount = 1;
+            mappingHeader.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            mappingHeader.ColumnStyles.Add(
+                new ColumnStyle(SizeType.AutoSize));
+            mappingHeader.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mappingLayout.Controls.Add(mappingHeader, 0, 0);
 
             mappingTitleLabel = MakeLabel(
                 "Live lichtwaarde → Doel-ISO", 13, FontStyle.Regular,
                 Color.FromArgb(31, 35, 40));
-            mappingTitleLabel.SetBounds(20, 10, 370, 34);
-            mappingPanel.Controls.Add(mappingTitleLabel);
+            mappingTitleLabel.AutoSize = true;
+            mappingTitleLabel.AutoEllipsis = false;
+            mappingTitleLabel.Dock = DockStyle.Fill;
+            mappingTitleLabel.Margin = new Padding(0, 0, 16, 0);
+            mappingHeader.Controls.Add(mappingTitleLabel, 0, 0);
 
             lastMeasuredLabel = MakeLabel(
                 "Wachten op eerste meting", 9, FontStyle.Regular,
                 Color.FromArgb(99, 108, 118));
+            lastMeasuredLabel.AutoSize = true;
+            lastMeasuredLabel.AutoEllipsis = false;
             lastMeasuredLabel.TextAlign = ContentAlignment.MiddleRight;
-            lastMeasuredLabel.SetBounds(mappingPanel.Width - 300, 10, 280, 34);
-            lastMeasuredLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            mappingPanel.Controls.Add(lastMeasuredLabel);
+            lastMeasuredLabel.Anchor = AnchorStyles.Right;
+            lastMeasuredLabel.Margin = Padding.Empty;
+            mappingHeader.Controls.Add(lastMeasuredLabel, 1, 0);
 
             rangeControl = new LightRangeControl();
-            rangeControl.SetBounds(20, 48, mappingPanel.Width - 40, 100);
-            rangeControl.Anchor = AnchorStyles.Top | AnchorStyles.Left |
-                AnchorStyles.Right;
-            mappingPanel.Controls.Add(rangeControl);
+            rangeControl.Dock = DockStyle.Fill;
+            rangeControl.MinimumSize = new Size(0, 116);
+            rangeControl.Margin = new Padding(0, 10, 0, 12);
+            mappingLayout.Controls.Add(rangeControl, 0, 1);
 
             metrics = new TableLayoutPanel();
+            metrics.AutoSize = true;
+            metrics.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            metrics.Dock = DockStyle.Fill;
+            metrics.Margin = Padding.Empty;
+            metrics.Padding = new Padding(0, 2, 0, 4);
+            metrics.AccessibleName = "Actuele lichtwaarden";
             metrics.ColumnCount = 3;
             metrics.RowCount = 2;
             metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
             metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
             metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
-            metrics.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            metrics.SetBounds(20, 158, mappingPanel.Width - 40, 88);
-            metrics.Anchor = AnchorStyles.Top | AnchorStyles.Left |
-                AnchorStyles.Right;
-            mappingPanel.Controls.Add(metrics);
+            metrics.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            metrics.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mappingLayout.Controls.Add(metrics, 0, 2);
 
             Label lightCaption = MakeLabel(
                 "Lichtwaarde", 10, FontStyle.Regular,
                 Color.FromArgb(54, 65, 82));
+            lightCaption.AutoSize = true;
+            lightCaption.AutoEllipsis = false;
             lightCaption.TextAlign = ContentAlignment.MiddleCenter;
             metrics.Controls.Add(lightCaption, 0, 0);
             lightCaption.Dock = DockStyle.Fill;
+            lightCaption.Margin = new Padding(4, 0, 4, 4);
 
             Label rangeCaption = MakeLabel(
                 "Actief bereik", 10, FontStyle.Regular,
                 Color.FromArgb(54, 65, 82));
+            rangeCaption.AutoSize = true;
+            rangeCaption.AutoEllipsis = false;
             rangeCaption.TextAlign = ContentAlignment.MiddleCenter;
             metrics.Controls.Add(rangeCaption, 1, 0);
             rangeCaption.Dock = DockStyle.Fill;
+            rangeCaption.Margin = new Padding(4, 0, 4, 4);
 
             Label targetCaption = MakeLabel(
                 "Doel-ISO", 10, FontStyle.Regular,
                 Color.FromArgb(54, 65, 82));
+            targetCaption.AutoSize = true;
+            targetCaption.AutoEllipsis = false;
             targetCaption.TextAlign = ContentAlignment.MiddleCenter;
             metrics.Controls.Add(targetCaption, 2, 0);
             targetCaption.Dock = DockStyle.Fill;
+            targetCaption.Margin = new Padding(4, 0, 4, 4);
 
             lightLabel = MakeLabel(
                 "—", 30, FontStyle.Bold, Color.FromArgb(31, 111, 235));
+            lightLabel.AutoSize = true;
+            lightLabel.AutoEllipsis = false;
             lightLabel.TextAlign = ContentAlignment.MiddleCenter;
             lightLabel.Dock = DockStyle.Fill;
+            lightLabel.Margin = new Padding(4, 0, 4, 6);
             lightLabel.AccessibleName = "Actuele lichtwaarde";
             metrics.Controls.Add(lightLabel, 0, 1);
 
             activeRangeLabel = MakeLabel(
                 "—", 23, FontStyle.Bold, Color.FromArgb(31, 111, 235));
+            activeRangeLabel.AutoSize = true;
+            activeRangeLabel.AutoEllipsis = false;
             activeRangeLabel.TextAlign = ContentAlignment.MiddleCenter;
             activeRangeLabel.Dock = DockStyle.Fill;
+            activeRangeLabel.Margin = new Padding(4, 0, 4, 6);
             activeRangeLabel.AccessibleName = "Actief lichtbereik";
             metrics.Controls.Add(activeRangeLabel, 1, 1);
 
             targetIsoLabel = MakeLabel(
                 "—", 30, FontStyle.Bold, Color.FromArgb(31, 111, 235));
+            targetIsoLabel.AutoSize = true;
+            targetIsoLabel.AutoEllipsis = false;
             targetIsoLabel.TextAlign = ContentAlignment.MiddleCenter;
             targetIsoLabel.Dock = DockStyle.Fill;
+            targetIsoLabel.Margin = new Padding(4, 0, 4, 6);
             targetIsoLabel.AccessibleName = "Doel ISO";
             metrics.Controls.Add(targetIsoLabel, 2, 1);
 
@@ -1128,48 +1185,106 @@ namespace Jvdp.LightDarkroomOverlay
                 "", 9, FontStyle.Regular, Color.FromArgb(99, 108, 118));
             mappingSummaryLabel.Visible = false;
 
-            profilePanel = MakeLightSurface(sectionWidth, 62);
+            profilePanel = MakeLightSurface(sectionWidth, 1);
+            profilePanel.AutoSize = true;
+            profilePanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             profilePanel.Margin = new Padding(0, 0, 0, 10);
             dashboard.Controls.Add(profilePanel);
+
+            dashboardProfileLayout = new TableLayoutPanel();
+            dashboardProfileLayout.AutoSize = true;
+            dashboardProfileLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            dashboardProfileLayout.Dock = DockStyle.Top;
+            dashboardProfileLayout.Margin = Padding.Empty;
+            dashboardProfileLayout.Padding = new Padding(18, 10, 18, 10);
+            dashboardProfileLayout.ColumnCount = 2;
+            dashboardProfileLayout.RowCount = 2;
+            dashboardProfileLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            dashboardProfileLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.AutoSize));
+            dashboardProfileLayout.RowStyles.Add(
+                new RowStyle(SizeType.AutoSize));
+            dashboardProfileLayout.RowStyles.Add(
+                new RowStyle(SizeType.AutoSize));
+            profilePanel.Controls.Add(dashboardProfileLayout);
+
             profileCaptionLabel = MakeLabel(
                 "Actief profiel", 9, FontStyle.Regular,
                 Color.FromArgb(99, 108, 118));
-            profileCaptionLabel.SetBounds(18, 7, 180, 22);
-            profilePanel.Controls.Add(profileCaptionLabel);
+            profileCaptionLabel.AutoSize = true;
+            profileCaptionLabel.AutoEllipsis = false;
+            profileCaptionLabel.Dock = DockStyle.Fill;
+            profileCaptionLabel.Margin = new Padding(0, 0, 16, 2);
+            dashboardProfileLayout.Controls.Add(profileCaptionLabel, 0, 0);
+
             profileNameLabel = MakeLabel(
                 "Standaard · alle booths", 11, FontStyle.Bold,
                 Color.FromArgb(31, 35, 40));
-            profileNameLabel.SetBounds(18, 27, profilePanel.Width - 210, 28);
-            profileNameLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left |
-                AnchorStyles.Right;
-            profilePanel.Controls.Add(profileNameLabel);
-            mappingSettingsButton = MakeLightButton("Profiel bekijken", false);
-            mappingSettingsButton.SetBounds(profilePanel.Width - 172, 10, 154, 42);
-            mappingSettingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            mappingSettingsButton.Click += delegate { ShowIsoMappingSettings(); };
-            profilePanel.Controls.Add(mappingSettingsButton);
+            profileNameLabel.AutoSize = true;
+            profileNameLabel.AutoEllipsis = false;
+            profileNameLabel.Dock = DockStyle.Fill;
+            profileNameLabel.Margin = new Padding(0, 0, 16, 0);
+            dashboardProfileLayout.Controls.Add(profileNameLabel, 0, 1);
 
-            detailsHeader = MakeLightSurface(sectionWidth, 52);
+            mappingSettingsButton = MakeLightButton("Profiel bekijken", false);
+            mappingSettingsButton.AutoSize = true;
+            mappingSettingsButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            mappingSettingsButton.MinimumSize = new Size(154, 42);
+            mappingSettingsButton.Anchor = AnchorStyles.Right;
+            mappingSettingsButton.Margin = Padding.Empty;
+            mappingSettingsButton.Click += delegate { ShowIsoMappingSettings(); };
+            dashboardProfileLayout.Controls.Add(mappingSettingsButton, 1, 0);
+            dashboardProfileLayout.SetRowSpan(mappingSettingsButton, 2);
+
+            detailsHeader = MakeLightSurface(sectionWidth, 1);
+            detailsHeader.AutoSize = true;
+            detailsHeader.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             detailsHeader.Margin = new Padding(0, 0, 0, 4);
             dashboard.Controls.Add(detailsHeader);
+
+            detailsHeaderLayout = new TableLayoutPanel();
+            detailsHeaderLayout.AutoSize = true;
+            detailsHeaderLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            detailsHeaderLayout.Dock = DockStyle.Top;
+            detailsHeaderLayout.Margin = Padding.Empty;
+            detailsHeaderLayout.Padding = new Padding(10, 5, 18, 5);
+            detailsHeaderLayout.ColumnCount = 2;
+            detailsHeaderLayout.RowCount = 1;
+            detailsHeaderLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100));
+            detailsHeaderLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.AutoSize));
+            detailsHeaderLayout.RowStyles.Add(
+                new RowStyle(SizeType.AutoSize));
+            detailsHeader.Controls.Add(detailsHeaderLayout);
+
             detailsToggleButton = MakeLightButton(
                 "Verbindingen en technische details", false);
             detailsToggleButton.FlatAppearance.BorderSize = 0;
             detailsToggleButton.TextAlign = ContentAlignment.MiddleLeft;
-            detailsToggleButton.SetBounds(10, 5,
-                Math.Min(360, detailsHeader.Width - 300), 42);
+            detailsToggleButton.AutoSize = true;
+            detailsToggleButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            detailsToggleButton.MinimumSize = new Size(280, 42);
+            detailsToggleButton.Anchor = AnchorStyles.Left;
+            detailsToggleButton.Margin = new Padding(0, 0, 16, 0);
             detailsToggleButton.AccessibleDescription =
                 "Toont of verbergt technische verbindingsinformatie.";
-            detailsHeader.Controls.Add(detailsToggleButton);
+            detailsHeaderLayout.Controls.Add(detailsToggleButton, 0, 0);
+
             detailsSummaryLabel = MakeLabel(
                 "Sensor zoeken · Darkroom zoeken", 9, FontStyle.Regular,
                 Color.FromArgb(99, 108, 118));
+            detailsSummaryLabel.AutoSize = true;
+            detailsSummaryLabel.AutoEllipsis = false;
             detailsSummaryLabel.TextAlign = ContentAlignment.MiddleRight;
-            detailsSummaryLabel.SetBounds(detailsHeader.Width - 390, 5, 372, 42);
-            detailsSummaryLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            detailsHeader.Controls.Add(detailsSummaryLabel);
+            detailsSummaryLabel.Anchor = AnchorStyles.Right;
+            detailsSummaryLabel.Margin = Padding.Empty;
+            detailsHeaderLayout.Controls.Add(detailsSummaryLabel, 1, 0);
 
-            detailsPanel = MakeLightSurface(sectionWidth, 196);
+            detailsPanel = MakeLightSurface(sectionWidth, 1);
+            detailsPanel.AutoSize = true;
+            detailsPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             detailsPanel.Margin = new Padding(0, 0, 0, 8);
             detailsPanel.Visible = false;
             dashboard.Controls.Add(detailsPanel);
@@ -1266,7 +1381,7 @@ namespace Jvdp.LightDarkroomOverlay
             };
             stabilityFlow.Controls.Add(stabilitySecondsInput);
             countdownLabel = MakeLabel(
-                "0,0 / 30,0 sec", 9, FontStyle.Regular,
+                "0,0 / 60,0 sec", 9, FontStyle.Regular,
                 Color.FromArgb(99, 108, 118));
             countdownLabel.AutoSize = true;
             countdownLabel.AutoEllipsis = false;
@@ -1301,29 +1416,42 @@ namespace Jvdp.LightDarkroomOverlay
             actionLabel = MakeLabel(
                 "Wachten op een lichtmeting van de sensor.", 10,
                 FontStyle.Regular, Color.FromArgb(71, 78, 88));
-            actionLabel.SetBounds(0, 0, sectionWidth, 32);
+            actionLabel.AutoSize = true;
+            actionLabel.AutoEllipsis = false;
+            actionLabel.MinimumSize = new Size(sectionWidth, 0);
+            actionLabel.MaximumSize = new Size(sectionWidth, 0);
             actionLabel.Margin = new Padding(0, 0, 0, 8);
             actionLabel.TextAlign = ContentAlignment.MiddleLeft;
             actionLabel.AccessibleName = "Actuele activiteit";
             dashboard.Controls.Add(actionLabel);
 
             actionPanel = new TableLayoutPanel();
+            actionPanel.AutoSize = true;
+            actionPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             actionPanel.ColumnCount = 2;
             actionPanel.RowCount = 1;
             actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             actionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            actionPanel.SetBounds(0, 0, sectionWidth, 58);
+            actionPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            actionPanel.MinimumSize = new Size(sectionWidth, 0);
+            actionPanel.MaximumSize = new Size(sectionWidth, 0);
             actionPanel.Margin = new Padding(0);
             dashboard.Controls.Add(actionPanel);
 
             pauseButton = MakeLightButton(
                 "Automatisch aanpassen stoppen", false);
+            pauseButton.AutoSize = true;
+            pauseButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            pauseButton.MinimumSize = new Size(1, 52);
             pauseButton.Dock = DockStyle.Fill;
             pauseButton.Margin = new Padding(0, 0, 6, 0);
             pauseButton.Click += delegate { TogglePause(); };
             actionPanel.Controls.Add(pauseButton, 0, 0);
 
             runActionButton = MakeLightButton("Doel-ISO nu toepassen", true);
+            runActionButton.AutoSize = true;
+            runActionButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            runActionButton.MinimumSize = new Size(1, 52);
             runActionButton.Dock = DockStyle.Fill;
             runActionButton.Margin = new Padding(6, 0, 0, 0);
             runActionButton.Click += delegate { StartTargetIsoAction(false); };
@@ -1464,7 +1592,6 @@ namespace Jvdp.LightDarkroomOverlay
             coverGuardTimer.Tick += delegate { RaiseFullscreenCovers(); };
 
             CaptureResponsiveFonts(dashboard);
-            CaptureResponsiveDashboardLayout(dashboard);
             CaptureTextFitFonts(this);
             LayoutMainChrome();
             ApplyResponsiveTypography();
@@ -1876,42 +2003,6 @@ namespace Jvdp.LightDarkroomOverlay
                 if (rangeControl != null)
                     rangeControl.VisualScale = scale;
                 float layoutScale = scale * dpiScale;
-                if (metrics != null && metrics.RowStyles.Count > 0)
-                    metrics.RowStyles[0].Height =
-                        (int)Math.Ceiling(31 * layoutScale);
-
-                foreach (KeyValuePair<Control, Rectangle> item in
-                    responsiveDashboardBounds)
-                {
-                    Control control = item.Key;
-                    if (control == null || control.IsDisposed)
-                        continue;
-                    Rectangle basis = item.Value;
-                    if (control.Parent == dashboard)
-                    {
-                        control.Height = (int)Math.Round(
-                            basis.Height * layoutScale);
-                        Padding margin;
-                        if (responsiveDashboardMargins.TryGetValue(
-                            control, out margin))
-                            control.Margin = new Padding(
-                                margin.Left,
-                                (int)Math.Round(
-                                    margin.Top * layoutScale),
-                                margin.Right,
-                                (int)Math.Round(
-                                    margin.Bottom * layoutScale));
-                        continue;
-                    }
-                    if (control.Dock != DockStyle.None ||
-                        control.Parent is TableLayoutPanel ||
-                        control.Parent is FlowLayoutPanel)
-                        continue;
-                    control.Top = (int)Math.Round(
-                        basis.Top * layoutScale);
-                    control.Height = (int)Math.Round(
-                        basis.Height * layoutScale);
-                }
                 dashboard.Padding = new Padding(
                     (int)Math.Ceiling(24 * layoutScale),
                     (int)Math.Ceiling(18 * layoutScale),
@@ -2080,17 +2171,12 @@ namespace Jvdp.LightDarkroomOverlay
 
             Size mappingTitleSize = MeasureSafeText(mappingTitleLabel);
             Size measuredSize = MeasureSafeText(lastMeasuredLabel);
-            Size profileCaptionSize = MeasureSafeText(profileCaptionLabel);
             Size profileNameSize = MeasureSafeText(profileNameLabel);
             Size profileButtonSize = MeasureSafeButton(
                 mappingSettingsButton,
                 (int)Math.Ceiling(154 * layoutScale),
                 (int)Math.Ceiling(42 * layoutScale));
             Size detailsButtonText = MeasureSafeText(detailsToggleButton);
-            Size detailsButtonSize = MeasureSafeButton(
-                detailsToggleButton,
-                (int)Math.Ceiling(280 * layoutScale),
-                (int)Math.Ceiling(42 * layoutScale));
             Size detailsSummarySize = MeasureSafeText(detailsSummaryLabel);
 
             int mappingTitleWidth = Math.Max(
@@ -2120,65 +2206,15 @@ namespace Jvdp.LightDarkroomOverlay
                 smallSide * 2 + detailsButtonWidth + gap +
                 detailsSummaryWidth);
 
-            mappingPanel.Width = sectionWidth;
-            profilePanel.Width = sectionWidth;
-            detailsHeader.Width = sectionWidth;
-            detailsPanel.Width = sectionWidth;
-            actionLabel.Width = sectionWidth;
-            actionPanel.Width = sectionWidth;
-
-            mappingTitleLabel.Left = side;
-            mappingTitleLabel.Width = mappingTitleWidth;
-            lastMeasuredLabel.Left = sectionWidth - side - measuredWidth;
-            lastMeasuredLabel.Width = measuredWidth;
-            rangeControl.Left = side;
-            rangeControl.Width = Math.Max(1, sectionWidth - side * 2);
-            metrics.Left = side;
-            metrics.Width = Math.Max(1, sectionWidth - side * 2);
-            mappingPanel.Height = Math.Max(
-                (int)Math.Ceiling(264 * layoutScale),
-                metrics.Bottom + side + 2);
-
-            mappingSettingsButton.SetBounds(
-                sectionWidth - smallSide - profileButtonSize.Width,
-                smallSide,
-                profileButtonSize.Width,
-                profileButtonSize.Height);
-            profileCaptionLabel.SetBounds(
-                smallSide, smallSide,
-                Math.Max(1, mappingSettingsButton.Left - gap - smallSide),
-                Math.Max(profileCaptionSize.Height,
-                    (int)Math.Ceiling(20 * layoutScale)));
-            profileNameLabel.Left = smallSide;
-            profileNameLabel.Top = profileCaptionLabel.Bottom +
-                Math.Max(1, (int)Math.Ceiling(2 * layoutScale));
-            profileNameLabel.Width = Math.Max(1,
-                mappingSettingsButton.Left - gap - profileNameLabel.Left);
-            profileNameLabel.Height = Math.Max(
-                profileNameSize.Height,
-                (int)Math.Ceiling(26 * layoutScale));
-            profilePanel.Height = Math.Max(
-                profileNameLabel.Bottom + smallSide + 2,
-                mappingSettingsButton.Bottom + smallSide + 2);
-
-            detailsToggleButton.SetBounds(
-                Math.Max(1, (int)Math.Ceiling(10 * layoutScale)),
-                Math.Max(1, (int)Math.Ceiling(5 * layoutScale)),
-                detailsButtonWidth, detailsButtonSize.Height);
-            detailsSummaryLabel.Left =
-                sectionWidth - smallSide - detailsSummaryWidth;
-            detailsSummaryLabel.Width = detailsSummaryWidth;
-            detailsSummaryLabel.Top = detailsToggleButton.Top;
-            detailsSummaryLabel.Height = Math.Max(
-                detailsButtonSize.Height, detailsSummarySize.Height);
-            detailsHeader.Height = Math.Max(
-                detailsToggleButton.Bottom,
-                detailsSummaryLabel.Bottom) +
-                Math.Max(1, (int)Math.Ceiling(5 * layoutScale)) + 2;
+            SizeContentDrivenPanel(
+                mappingPanel, mappingLayout, sectionWidth);
+            SizeContentDrivenPanel(
+                profilePanel, dashboardProfileLayout, sectionWidth);
+            SizeContentDrivenPanel(
+                detailsHeader, detailsHeaderLayout, sectionWidth);
 
             if (detailsLayout != null)
             {
-                detailsLayout.Width = Math.Max(1, sectionWidth - 2);
                 int detailValueWidth = Math.Max(
                     (int)Math.Ceiling(260 * layoutScale),
                     sectionWidth - (int)Math.Ceiling(260 * layoutScale));
@@ -2186,15 +2222,76 @@ namespace Jvdp.LightDarkroomOverlay
                 darkroomLabel.MaximumSize = new Size(detailValueWidth, 0);
                 boothLabel.MaximumSize = new Size(detailValueWidth, 0);
                 currentIsoLabel.MaximumSize = new Size(detailValueWidth, 0);
-                detailsLayout.PerformLayout();
-                int detailsContentHeight = Math.Max(
-                    detailsLayout.Height,
-                    detailsLayout.GetPreferredSize(
-                        new Size(detailsLayout.Width, 0)).Height);
-                detailsPanel.Height = Math.Max(
-                    (int)Math.Ceiling(160 * layoutScale),
-                    detailsContentHeight + 6);
+                SizeContentDrivenPanel(
+                    detailsPanel, detailsLayout, sectionWidth);
             }
+
+            SizeContentDrivenControl(actionLabel, sectionWidth);
+            SizeContentDrivenControl(actionPanel, sectionWidth);
+            dashboard.PerformLayout();
+        }
+
+        private static void SizeContentDrivenPanel(
+            Panel panel, Control content, int width)
+        {
+            if (panel == null || content == null)
+                return;
+
+            width = Math.Max(1, width);
+            panel.SuspendLayout();
+            content.SuspendLayout();
+            try
+            {
+                panel.MinimumSize = Size.Empty;
+                panel.MaximumSize = Size.Empty;
+                panel.Width = width;
+
+                int frameWidth = Math.Max(0,
+                    panel.Width - panel.ClientSize.Width);
+                int frameHeight = Math.Max(0,
+                    panel.Height - panel.ClientSize.Height);
+                int contentWidth = Math.Max(1,
+                    width - frameWidth - panel.Padding.Horizontal);
+
+                content.MinimumSize = new Size(contentWidth, 0);
+                content.MaximumSize = new Size(contentWidth, 0);
+                content.Width = contentWidth;
+                content.PerformLayout();
+
+                Size preferred = content.GetPreferredSize(
+                    new Size(contentWidth, 0));
+                int contentHeight = Math.Max(1, preferred.Height);
+                content.Height = contentHeight;
+                int panelHeight = contentHeight +
+                    panel.Padding.Vertical + frameHeight;
+
+                panel.MinimumSize = new Size(width, panelHeight);
+                panel.MaximumSize = new Size(width, 0);
+                panel.Size = new Size(width, panelHeight);
+            }
+            finally
+            {
+                content.ResumeLayout(true);
+                panel.ResumeLayout(true);
+            }
+        }
+
+        private static void SizeContentDrivenControl(
+            Control control, int width)
+        {
+            if (control == null)
+                return;
+
+            width = Math.Max(1, width);
+            control.MinimumSize = Size.Empty;
+            control.MaximumSize = new Size(width, 0);
+            control.Width = width;
+            control.PerformLayout();
+            int height = Math.Max(1,
+                control.GetPreferredSize(new Size(width, 0)).Height);
+            control.MinimumSize = new Size(width, height);
+            control.MaximumSize = new Size(width, 0);
+            control.Size = new Size(width, height);
         }
 
         private static Size MeasureSafeText(Control control)
@@ -2205,21 +2302,6 @@ namespace Jvdp.LightDarkroomOverlay
                 TextFormatFlags.NoPadding |
                 TextFormatFlags.NoPrefix |
                 TextFormatFlags.SingleLine);
-        }
-
-        private void CaptureResponsiveDashboardLayout(Control root)
-        {
-            if (root == null)
-                return;
-            foreach (Control child in root.Controls)
-            {
-                if (!responsiveDashboardBounds.ContainsKey(child))
-                {
-                    responsiveDashboardBounds.Add(child, child.Bounds);
-                    responsiveDashboardMargins.Add(child, child.Margin);
-                }
-                CaptureResponsiveDashboardLayout(child);
-            }
         }
 
         private void HideInTrayWhenMinimized()
@@ -2477,7 +2559,7 @@ namespace Jvdp.LightDarkroomOverlay
                     return Math.Max(5, Math.Min(300, value));
             }
             catch { }
-            return 30;
+            return DefaultStabilitySeconds;
         }
 
         private void SaveStabilitySeconds()
@@ -2934,6 +3016,10 @@ namespace Jvdp.LightDarkroomOverlay
                 "Sensor verbonden · Darkroom actief · automatisch gestart";
             lastMeasuredLabel.Text =
                 "Laatste lichtmeting 63 · doelwaarde ISO 1000";
+            lightLabel.Text = "100";
+            activeRangeLabel.Text = "85–100";
+            targetIsoLabel.Text = "25600";
+            rangeControl.UpdateData(CreateDefaultIsoBands(), 100, 400);
             actionLabel.Text =
                 "De lichtwaarde is stabiel; de doel-ISO kan veilig worden toegepast.";
             detailsPanel.Visible = showDetails;

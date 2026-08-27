@@ -89,7 +89,7 @@ Minimizing or closing the window always sends it back to the tray; only the expl
 `Afsluiten` tray command exits the application completely. Starting the executable a
 second time reopens the already running dashboard instead of creating a competing
 sensor connection. As soon
-as Darkroom Booth is running and the PC-mapped target ISO has been stable for 30
+as Darkroom Booth is running and the PC-mapped target ISO has been stable for 60
 seconds, the ISO check/change runs automatically and Booth Mode is started. The
 stability period is adjustable from 5 to 300 seconds under the expandable technical
 details and is remembered after a reboot. `ISO ... nu toepassen` remains available

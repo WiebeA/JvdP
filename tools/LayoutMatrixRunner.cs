@@ -204,6 +204,7 @@ namespace Jvdp.LayoutTests
                 ValidateCapturedDpi(result);
                 ValidateControlTree(form, result.Issues);
                 ValidateRangeControls(form, result.Issues);
+                ValidateContentDrivenDashboard(form, result.Issues);
                 Control statusOverlay = null;
                 if (!headlessMode && state == "statusvlak" &&
                     !form.StatusPanelVisibleForLayoutTest)
@@ -486,43 +487,19 @@ namespace Jvdp.LayoutTests
                 Label autoLabel = control as Label;
                 if (autoLabel != null)
                 {
-                    int labelWidth = Math.Max(1,
-                        autoLabel.ClientSize.Width -
-                        autoLabel.Padding.Horizontal);
-                    int labelHeight = Math.Max(1,
-                        autoLabel.ClientSize.Height -
-                        autoLabel.Padding.Vertical);
-                    Size labelMeasured;
-                    if (autoLabel.UseCompatibleTextRendering)
-                    {
-                        using (Graphics graphics =
-                            autoLabel.CreateGraphics())
-                        using (StringFormat format = new StringFormat())
-                        {
-                            format.Trimming = StringTrimming.None;
-                            SizeF measuredSize = graphics.MeasureString(
-                                autoLabel.Text, autoLabel.Font,
-                                labelWidth, format);
-                            labelMeasured = new Size(
-                                (int)Math.Ceiling(measuredSize.Width),
-                                (int)Math.Ceiling(measuredSize.Height));
-                        }
-                    }
-                    else
-                    {
-                        labelMeasured = TextRenderer.MeasureText(
-                            autoLabel.Text, autoLabel.Font,
-                            new Size(labelWidth, Int32.MaxValue),
-                            TextFormatFlags.NoPadding |
-                            TextFormatFlags.NoPrefix |
-                            TextFormatFlags.WordBreak);
-                    }
-                    if (labelMeasured.Width > labelWidth + 2 ||
-                        labelMeasured.Height > labelHeight + 2)
+                    int proposedWidth = Math.Max(1,
+                        autoLabel.ClientSize.Width);
+                    Size labelPreferred = autoLabel.GetPreferredSize(
+                        new Size(proposedWidth, 0));
+                    if (labelPreferred.Width >
+                            autoLabel.ClientSize.Width + 2 ||
+                        labelPreferred.Height >
+                            autoLabel.ClientSize.Height + 2)
                         issues.Add(String.Format(
                             "AutoSize-label past niet: '{0}' nodig={1}, beschikbaar={2}x{3}.",
-                            SafeText(autoLabel.Text), labelMeasured,
-                            labelWidth, labelHeight));
+                            SafeText(autoLabel.Text), labelPreferred,
+                            autoLabel.ClientSize.Width,
+                            autoLabel.ClientSize.Height));
                     return;
                 }
                 Size preferred = control.GetPreferredSize(
@@ -708,6 +685,82 @@ namespace Jvdp.LayoutTests
             }
         }
 
+        private static void ValidateContentDrivenDashboard(
+            Control root, List<string> issues)
+        {
+            Panel mappingPanel = FindControlByAccessibleName(
+                root, "Live lichtwaarde en ISO-overzicht") as Panel;
+            if (mappingPanel == null ||
+                !IsVisibleForValidation(mappingPanel, root))
+                return;
+
+            TableLayoutPanel mappingLayout = null;
+            foreach (Control child in mappingPanel.Controls)
+            {
+                mappingLayout = child as TableLayoutPanel;
+                if (mappingLayout != null)
+                    break;
+            }
+            if (mappingLayout == null)
+            {
+                issues.Add(
+                    "Het lichtwaardevak mist zijn inhoudsgestuurde layout.");
+                return;
+            }
+
+            Size layoutPreferred = mappingLayout.GetPreferredSize(
+                new Size(Math.Max(1, mappingLayout.ClientSize.Width), 0));
+            if (mappingLayout.ClientSize.Height + 2 <
+                    layoutPreferred.Height ||
+                mappingPanel.ClientSize.Height + 2 < mappingLayout.Bottom)
+                issues.Add(String.Format(
+                    "Het lichtwaardevak is kleiner dan zijn inhoud: " +
+                    "kaart={0}, layout={1}, voorkeur={2}.",
+                    mappingPanel.ClientSize, mappingLayout.Bounds,
+                    layoutPreferred));
+
+            TableLayoutPanel metrics = FindControlByAccessibleName(
+                root, "Actuele lichtwaarden") as TableLayoutPanel;
+            if (metrics == null)
+            {
+                issues.Add("De inhoudsgestuurde meetwaardenlayout ontbreekt.");
+                return;
+            }
+            foreach (RowStyle style in metrics.RowStyles)
+                if (style.SizeType != SizeType.AutoSize)
+                    issues.Add(
+                        "Een meetwaardenrij heeft geen AutoSize-hoogte.");
+
+            string[] names = {
+                "Actuele lichtwaarde", "Actief lichtbereik", "Doel ISO"
+            };
+            foreach (string name in names)
+            {
+                Label label = FindControlByAccessibleName(
+                    metrics, name) as Label;
+                if (label == null)
+                {
+                    issues.Add("Meetwaarde ontbreekt: " + name + ".");
+                    continue;
+                }
+                if (!label.AutoSize)
+                    issues.Add("Meetwaarde gebruikt geen AutoSize: " +
+                        name + ".");
+                Size preferred = label.GetPreferredSize(
+                    new Size(Math.Max(1, label.ClientSize.Width), 0));
+                if (label.ClientSize.Height + 2 < preferred.Height)
+                    issues.Add(String.Format(
+                        "Meetwaarde wordt verticaal afgesneden: {0} " +
+                        "heeft {1}px en vereist {2}px.",
+                        name, label.ClientSize.Height, preferred.Height));
+                if (label.Parent != null &&
+                    label.Bounds.Bottom >
+                        label.Parent.ClientRectangle.Bottom + 2)
+                    issues.Add("Meetwaarde valt buiten zijn parent: " +
+                        name + ".");
+            }
+        }
+
         private static CaptureResult CaptureRangeDpiRegression()
         {
             CaptureResult result = new CaptureResult();
@@ -715,6 +768,13 @@ namespace Jvdp.LayoutTests
             result.RequestedSize = Size.Empty;
             result.ActualSize = Size.Empty;
             result.Dpi = 0;
+            FieldInfo stabilityDefault = typeof(OverlayForm).GetField(
+                "DefaultStabilitySeconds",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            if (stabilityDefault == null ||
+                (int)stabilityDefault.GetRawConstantValue() != 60)
+                result.Issues.Add(
+                    "De standaard wachttijd voor lichtstabiliteit is niet 60 seconden.");
             float[] dpiScales = { 1f, 1.25f, 1.5f, 1.75f, 2f };
             float[] visualScales = { 1f, 1.3f };
             int[] bandCounts = { 6, 8 };
