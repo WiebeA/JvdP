@@ -5023,7 +5023,6 @@ namespace Jvdp.LightDarkroomOverlay
         {
             if (paused || manualActionRunning || !serialReady ||
                 targetIso <= 0 || !darkroomRunning ||
-                !boothMode ||
                 stableSeconds < stabilitySeconds ||
                 DateTime.Now < nextAutomaticAttemptAt)
                 return;
