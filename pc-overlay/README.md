@@ -27,17 +27,24 @@ Serial discovery and the periodic Darkroom control probe run outside the UI thre
 Opening a slow COM port or waiting for a Darkroom native control cannot freeze the
 main window.
 
-1. Leaves Booth Mode with Escape when necessary.
-2. Identifies Darkroom's one real `CXToolbar` through read-only process metadata.
-3. Sends Settings command `660` exactly once.
-4. Uses Darkroom's own native `Next Settings` command `662` (`0x0296`) to advance through at most ten pages.
-5. Stops as soon as native ISO ComboBox control `107` appears; that is the Camera page.
-6. Reads the current ISO and changes it only when it differs from the PC target.
-7. Confirms the selected ISO, then starts Booth Mode again.
+1. Identifies Darkroom's one real `CXToolbar` once in a background preflight and
+   caches the validated handles for that Darkroom process.
+2. Leaves Booth Mode with Escape only after the configured stability period.
+3. Sends Settings command `660` exactly once through the prepared command target.
+4. Sends the native Camera command `33082` directly. The bounded native page
+   navigation remains available only as a recovery route.
+5. Stops as soon as visible native ISO ComboBox control `107` appears.
+6. Finds the requested ISO with one exact native ComboBox lookup. The full list is
+   read only when the connected camera does not offer that exact ISO.
+7. Confirms the selected ISO, checks only separate visible Darkroom error dialogs,
+   then starts and visibly confirms Booth Mode again.
 
 The v5 accessibility/MSAA Camera search was removed after the test showed that Darkroom had already opened the native `Photos` settings page and the overlay then terminated during accessibility enumeration. Camera no longer needs to be found as a tile or label.
 
-If exact toolbar validation fails, a visible UI Automation `Back to Events` control may be invoked once. Otherwise the action stops without fallback commands.
+The normal action no longer traverses Darkroom's full UI Automation tree. Each step
+is timed in the log and the settings/change path has a ten-second deadline. Toolbar
+preparation is retried in the background without blocking the dashboard or an active
+automatic action.
 
 Detailed flow and logs: `DARKROOM-FLOW-AND-LOGGING.md`.
 ## ISO commit fix (v7)

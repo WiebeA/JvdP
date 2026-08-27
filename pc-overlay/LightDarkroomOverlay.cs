@@ -705,6 +705,8 @@ namespace Jvdp.LightDarkroomOverlay
         private const int DarkroomCameraSettingsCommand = 33082;
         private const int DarkroomToolbarControlId = 4083;
         private const int DarkroomCommandStartBooth = 0x83F0;
+        private const int DarkroomActionDeadlineMilliseconds = 10000;
+        private const int DarkroomControlPrepareWaitMilliseconds = 1500;
         private static readonly string BuildTag = BuildInfo.Version;
         private const string DefaultCoverTitle = "Please wait!";
         private const string DefaultCoverMessage =
@@ -811,6 +813,14 @@ namespace Jvdp.LightDarkroomOverlay
         private bool darkroomRunning;
         private bool boothMode;
         private int darkroomProcessId;
+        private IntPtr darkroomMainWindow = IntPtr.Zero;
+        private readonly object darkroomControlCacheSync = new object();
+        private IntPtr cachedDarkroomToolbar = IntPtr.Zero;
+        private IntPtr cachedDarkroomCommandTarget = IntPtr.Zero;
+        private IntPtr cachedDarkroomMainWindow = IntPtr.Zero;
+        private int cachedDarkroomProcessId;
+        private int darkroomControlPreflightActive;
+        private DateTime nextDarkroomControlPreflightAt = DateTime.MinValue;
         private int lastAppliedTargetIso;
         private int lastAppliedDarkroomProcessId;
         private readonly string logPath;
@@ -3365,6 +3375,10 @@ namespace Jvdp.LightDarkroomOverlay
             bool failed = false;
             bool coverShown = false;
             bool keepCoverVisible = manualCoverVisible;
+            Stopwatch actionTimer = Stopwatch.StartNew();
+            long previousStepMilliseconds = 0;
+            DateTime actionDeadlineUtc = DateTime.UtcNow.AddMilliseconds(
+                DarkroomActionDeadlineMilliseconds);
             try
             {
                 int desiredIso;
@@ -3380,26 +3394,32 @@ namespace Jvdp.LightDarkroomOverlay
                 if (process == null)
                     throw new InvalidOperationException("Darkroom Booth is not running.");
                 IntPtr window = process.MainWindowHandle;
+                LogActionTiming(
+                    actionTimer, ref previousStepMilliseconds,
+                    "Darkroom process found");
                 ShowWindowAsync(window, 9);
                 SetForegroundWindow(window);
-                Thread.Sleep(250);
+                SleepWithinActionDeadline(actionDeadlineUtc, 120);
                 coverShown = ShowFullscreenCovers(false);
-                Thread.Sleep(250);
+                SleepWithinActionDeadline(actionDeadlineUtc, 100);
                 LogDarkroomWindowState(process, window);
-                EnsureDarkroomReady(window);
                 SetManualActionStatus(
                     "Step 1/3 - opening Darkroom Camera settings...");
-                IntPtr combo = EnsureCameraSettingsOpen(process, window);
+                IntPtr combo = EnsureCameraSettingsOpen(
+                    process, window, actionDeadlineUtc);
+                LogActionTiming(
+                    actionTimer, ref previousStepMilliseconds,
+                    "Camera settings ready");
                 Log("Direct ISO control found: handle=" + combo +
                     ", automationId=107. Camera was opened through Darkroom's " +
                     "native Event Settings command and property sheet; no " +
                     "coordinates or mouse input used.");
-                List<ComboItem> items = ReadComboItems(combo);
                 string observedIso = ReadComboSelection(combo);
+                ComboItem target = FindTargetComboItem(combo, desiredIso);
                 Log("ISO state: PC target=" + desiredIso +
                     ", Darkroom current=" + observedIso +
-                    ", available choices=" + items.Count + ".");
-                ComboItem target = FindClosestNumericIso(items, desiredIso);
+                    ", selected target index=" +
+                    (target == null ? "none" : target.Index.ToString()) + ".");
                 if (target == null)
                     throw new InvalidOperationException(
                         "Darkroom does not expose any numeric ISO values.");
@@ -3426,17 +3446,13 @@ namespace Jvdp.LightDarkroomOverlay
                         "Step 2/3 - selecting target ISO " +
                         target.Value + "...");
                     string selectionMethod = SelectIsoWithoutCoordinates(
-                        window, ref combo, target);
+                        window, ref combo, target, actionDeadlineUtc);
                     Log("ISO selection method: " + selectionMethod + ".");
-                    Thread.Sleep(250);
-                    for (int check = 0; check < 10; check++)
-                    {
-                        if (DismissDarkroomPropertyError(window))
-                            throw new InvalidOperationException(
-                                "Darkroom reported that ISO " +
-                                target.Value + " could not be set.");
-                        Thread.Sleep(150);
-                    }
+                    SleepWithinActionDeadline(actionDeadlineUtc, 250);
+                    if (DismissDarkroomPropertyError(process.Id, window))
+                        throw new InvalidOperationException(
+                            "Darkroom reported that ISO " +
+                            target.Value + " could not be set.");
                     string confirmed = ReadComboSelection(combo);
                     if (!String.Equals(
                             confirmed, target.Value,
@@ -3451,10 +3467,16 @@ namespace Jvdp.LightDarkroomOverlay
                     Log(finalStatus);
                 }
 
+                LogActionTiming(
+                    actionTimer, ref previousStepMilliseconds,
+                    "ISO verified");
                 StartBoothModeAfterAction(window);
                 lastAppliedTargetIso = desiredIso;
                 lastAppliedDarkroomProcessId = process.Id;
                 finalStatus += " Booth mode started.";
+                LogActionTiming(
+                    actionTimer, ref previousStepMilliseconds,
+                    "Booth Mode restored");
                 Log(finalStatus);
             }
             catch (Exception exception)
@@ -3494,6 +3516,9 @@ namespace Jvdp.LightDarkroomOverlay
             }
             manualActionFailed = failed;
             manualActionStatus = finalStatus;
+            Log("Darkroom ISO action finished in " +
+                actionTimer.ElapsedMilliseconds + " ms; result=" +
+                (failed ? "failed" : "success") + ".");
             manualActionStatusUntil = DateTime.Now.AddSeconds(12);
             if (automatic && failed)
             {
@@ -3790,6 +3815,55 @@ namespace Jvdp.LightDarkroomOverlay
             Log(status);
         }
 
+        private void LogActionTiming(
+            Stopwatch timer, ref long previousStepMilliseconds,
+            string step)
+        {
+            long elapsed = timer.ElapsedMilliseconds;
+            Log("Darkroom timing: " + step + "=" +
+                (elapsed - previousStepMilliseconds) +
+                " ms; total=" + elapsed + " ms.");
+            previousStepMilliseconds = elapsed;
+        }
+
+        private static int GetRemainingActionMilliseconds(
+            DateTime actionDeadlineUtc)
+        {
+            int remaining = (int)Math.Ceiling(
+                (actionDeadlineUtc - DateTime.UtcNow).TotalMilliseconds);
+            if (remaining <= 0)
+                throw new TimeoutException(
+                    "Darkroom reageerde niet binnen de maximale actietijd.");
+            return remaining;
+        }
+
+        private static void SleepWithinActionDeadline(
+            DateTime actionDeadlineUtc, int milliseconds)
+        {
+            int remaining = GetRemainingActionMilliseconds(actionDeadlineUtc);
+            Thread.Sleep(Math.Min(milliseconds, remaining));
+            GetRemainingActionMilliseconds(actionDeadlineUtc);
+        }
+
+        private static bool WaitForCondition(
+            Func<bool> condition, int timeoutMilliseconds)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(
+                Math.Max(1, timeoutMilliseconds));
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    if (condition())
+                        return true;
+                }
+                catch { }
+                Thread.Sleep(50);
+            }
+            try { return condition(); }
+            catch { return false; }
+        }
+
         private static Process FindDarkroomProcess()
         {
             Process[] candidates = Process.GetProcessesByName("DarkroomBooth");
@@ -3804,51 +3878,194 @@ namespace Jvdp.LightDarkroomOverlay
             return selected;
         }
 
-        private void EnsureDarkroomReady(IntPtr window)
+        private void ClearDarkroomControlCache()
         {
-            if (FindAutomationElementByName(window, "Activate") != null &&
-                FindAutomationElementByName(window, "Start Trial") != null)
+            lock (darkroomControlCacheSync)
             {
-                LogVisibleDarkroomNames(window, "Activation screen detected");
-                throw new InvalidOperationException(
-                    "Darkroom is showing Activate/Start Trial instead of Events.");
+                cachedDarkroomToolbar = IntPtr.Zero;
+                cachedDarkroomCommandTarget = IntPtr.Zero;
+                cachedDarkroomMainWindow = IntPtr.Zero;
+                cachedDarkroomProcessId = 0;
+                nextDarkroomControlPreflightAt = DateTime.MinValue;
             }
         }
 
-        private IntPtr EnsureCameraSettingsOpen(
-            Process process, IntPtr window)
+        private bool TryGetPreparedDarkroomControl(
+            int processId, IntPtr mainWindow,
+            out IntPtr toolbar, out IntPtr commandTarget)
         {
-            IntPtr combo = FindIsoControlWithAutomation(window);
+            toolbar = IntPtr.Zero;
+            commandTarget = IntPtr.Zero;
+            lock (darkroomControlCacheSync)
+            {
+                if (cachedDarkroomProcessId != processId ||
+                    cachedDarkroomMainWindow != mainWindow ||
+                    cachedDarkroomToolbar == IntPtr.Zero ||
+                    cachedDarkroomCommandTarget == IntPtr.Zero ||
+                    !IsWindow(mainWindow) ||
+                    !IsWindow(cachedDarkroomToolbar) ||
+                    !IsWindow(cachedDarkroomCommandTarget) ||
+                    GetDlgCtrlID(cachedDarkroomToolbar) !=
+                        DarkroomToolbarControlId ||
+                    GetParent(cachedDarkroomToolbar) !=
+                        cachedDarkroomCommandTarget)
+                {
+                    cachedDarkroomToolbar = IntPtr.Zero;
+                    cachedDarkroomCommandTarget = IntPtr.Zero;
+                    cachedDarkroomMainWindow = IntPtr.Zero;
+                    cachedDarkroomProcessId = 0;
+                    return false;
+                }
+
+                uint toolbarProcessId;
+                uint targetProcessId;
+                GetWindowThreadProcessId(
+                    cachedDarkroomToolbar, out toolbarProcessId);
+                GetWindowThreadProcessId(
+                    cachedDarkroomCommandTarget, out targetProcessId);
+                if (toolbarProcessId != (uint)processId ||
+                    targetProcessId != (uint)processId)
+                {
+                    cachedDarkroomToolbar = IntPtr.Zero;
+                    cachedDarkroomCommandTarget = IntPtr.Zero;
+                    cachedDarkroomMainWindow = IntPtr.Zero;
+                    cachedDarkroomProcessId = 0;
+                    return false;
+                }
+
+                toolbar = cachedDarkroomToolbar;
+                commandTarget = cachedDarkroomCommandTarget;
+                return true;
+            }
+        }
+
+        private void QueueDarkroomControlPreflight(
+            int processId, IntPtr mainWindow)
+        {
+            IntPtr existingToolbar;
+            IntPtr existingTarget;
+            if (TryGetPreparedDarkroomControl(
+                    processId, mainWindow,
+                    out existingToolbar, out existingTarget))
+                return;
+            lock (darkroomControlCacheSync)
+            {
+                if (DateTime.UtcNow < nextDarkroomControlPreflightAt)
+                    return;
+                nextDarkroomControlPreflightAt =
+                    DateTime.UtcNow.AddSeconds(10);
+            }
+            if (Interlocked.CompareExchange(
+                    ref darkroomControlPreflightActive, 1, 0) != 0)
+                return;
+
+            Thread preflight = new Thread(delegate()
+            {
+                Stopwatch timer = Stopwatch.StartNew();
+                Process process = null;
+                try
+                {
+                    process = Process.GetProcessById(processId);
+                    if (process.MainWindowHandle != mainWindow)
+                        return;
+                    IntPtr toolbar = FindExactDarkroomToolbar(
+                        process, mainWindow);
+                    IntPtr commandTarget = toolbar == IntPtr.Zero
+                        ? IntPtr.Zero : GetParent(toolbar);
+                    if (toolbar == IntPtr.Zero ||
+                        commandTarget == IntPtr.Zero)
+                    {
+                        Log("Darkroom control preflight did not find the " +
+                            "validated command toolbar in " +
+                            timer.ElapsedMilliseconds + " ms.");
+                        return;
+                    }
+
+                    uint targetProcessId;
+                    GetWindowThreadProcessId(
+                        commandTarget, out targetProcessId);
+                    if (targetProcessId != (uint)processId)
+                        return;
+                    lock (darkroomControlCacheSync)
+                    {
+                        if (darkroomProcessId != processId ||
+                            process.MainWindowHandle != mainWindow)
+                            return;
+                        cachedDarkroomToolbar = toolbar;
+                        cachedDarkroomCommandTarget = commandTarget;
+                        cachedDarkroomMainWindow = mainWindow;
+                        cachedDarkroomProcessId = processId;
+                    }
+                    Log("Darkroom controls prepared in the background in " +
+                        timer.ElapsedMilliseconds + " ms; toolbar=" +
+                        toolbar + ".");
+                }
+                catch (Exception exception)
+                {
+                    Log("Darkroom control preflight failed safely in " +
+                        timer.ElapsedMilliseconds + " ms: " +
+                        exception.Message);
+                }
+                finally
+                {
+                    if (process != null)
+                        process.Dispose();
+                    Interlocked.Exchange(
+                        ref darkroomControlPreflightActive, 0);
+                }
+            });
+            preflight.IsBackground = true;
+            preflight.Name = "JvdP Darkroom control preflight";
+            preflight.Start();
+        }
+
+        private bool WaitForPreparedDarkroomControl(
+            int processId, IntPtr mainWindow, DateTime actionDeadlineUtc,
+            out IntPtr toolbar, out IntPtr commandTarget)
+        {
+            QueueDarkroomControlPreflight(processId, mainWindow);
+            DateTime waitUntil = DateTime.UtcNow.AddMilliseconds(
+                DarkroomControlPrepareWaitMilliseconds);
+            if (waitUntil > actionDeadlineUtc)
+                waitUntil = actionDeadlineUtc;
+            while (DateTime.UtcNow < waitUntil)
+            {
+                if (TryGetPreparedDarkroomControl(
+                        processId, mainWindow,
+                        out toolbar, out commandTarget))
+                    return true;
+                Thread.Sleep(50);
+            }
+            return TryGetPreparedDarkroomControl(
+                processId, mainWindow, out toolbar, out commandTarget);
+        }
+
+        private IntPtr EnsureCameraSettingsOpen(
+            Process process, IntPtr window, DateTime actionDeadlineUtc)
+        {
+            // Native child enumeration is effectively immediate. Avoid a full
+            // UI Automation subtree walk on the normal action path.
+            IntPtr combo = FindVisibleChildById(window, 107);
             if (combo != IntPtr.Zero)
                 return combo;
 
+            IntPtr toolbar;
+            IntPtr commandTarget;
+            if (!WaitForPreparedDarkroomControl(
+                    process.Id, window, actionDeadlineUtc,
+                    out toolbar, out commandTarget))
+                throw new InvalidOperationException(
+                    "Darkroom-bediening is nog niet voorbereid. " +
+                    "De software probeert dit op de achtergrond opnieuw.");
+
             SetForegroundWindow(window);
             SendVirtualKey(Keys.Escape);
-            Thread.Sleep(700);
-
-            IntPtr toolbar = FindExactDarkroomToolbar(process, window);
-            if (toolbar == IntPtr.Zero)
-            {
-                string backDetail;
-                if (TryInvokeSemanticControl(
-                        process.Id, "Back to Events", out backDetail))
+            WaitForCondition(
+                delegate
                 {
-                    Log("Left Global Settings through exact semantic control (" +
-                        backDetail + "); no coordinates used.");
-                    Thread.Sleep(900);
-                    toolbar = FindExactDarkroomToolbar(process, window);
-                }
-            }
-            if (toolbar == IntPtr.Zero)
-                throw new InvalidOperationException(
-                    "Darkroom's exact PhotoBooth toolbar could not be " +
-                    "validated. No Darkroom command was sent.");
-
-            IntPtr commandTarget = GetParent(toolbar);
-            if (commandTarget == IntPtr.Zero)
-                throw new InvalidOperationException(
-                    "Darkroom's validated toolbar has no command target. " +
-                    "No Darkroom command was sent.");
+                    return !IsIconic(window) && !WindowFillsScreen(window);
+                }, Math.Min(900,
+                    GetRemainingActionMilliseconds(actionDeadlineUtc)));
 
             if (!PostMessage(
                     commandTarget, WmCommand,
@@ -3858,7 +4075,7 @@ namespace Jvdp.LightDarkroomOverlay
             Log("Activated Settings exactly once through validated CXToolbar " +
                 "handle=" + toolbar + ".");
 
-            Thread.Sleep(700);
+            SleepWithinActionDeadline(actionDeadlineUtc, 250);
             if (!PostMessage(
                     commandTarget, WmCommand,
                     new IntPtr(DarkroomCameraSettingsCommand), IntPtr.Zero))
@@ -3866,7 +4083,10 @@ namespace Jvdp.LightDarkroomOverlay
                     "Darkroom rejected its native Camera settings command.");
             Log("Requested Darkroom Camera settings directly through native " +
                 "command " + DarkroomCameraSettingsCommand + ".");
-            combo = WaitForStableVisibleChildById(window, 107, 1800);
+            combo = WaitForStableVisibleChildById(
+                window, 107,
+                Math.Min(1800,
+                    GetRemainingActionMilliseconds(actionDeadlineUtc)));
             if (combo != IntPtr.Zero)
             {
                 Log("Reached Darkroom Camera settings directly; stable visible " +
@@ -3881,13 +4101,18 @@ namespace Jvdp.LightDarkroomOverlay
             // Eleven pages means ten advances reach Camera from any page.
             for (int pageDistance = 0; pageDistance <= 10; pageDistance++)
             {
-                for (int poll = 0; poll < 6; poll++)
+                if (DateTime.UtcNow >= actionDeadlineUtc)
+                    break;
+                for (int poll = 0; poll < 4; poll++)
                 {
                     combo = FindVisibleChildById(window, 107);
                     if (combo != IntPtr.Zero)
                     {
                         combo = WaitForStableVisibleChildById(
-                            window, 107, 1200);
+                            window, 107,
+                            Math.Min(1000,
+                                GetRemainingActionMilliseconds(
+                                    actionDeadlineUtc)));
                         if (combo == IntPtr.Zero)
                             continue;
                         Log("Reached Darkroom Camera settings through native " +
@@ -3896,7 +4121,7 @@ namespace Jvdp.LightDarkroomOverlay
                             pageDistance + ".");
                         return combo;
                     }
-                    Thread.Sleep(100);
+                    SleepWithinActionDeadline(actionDeadlineUtc, 80);
                 }
 
                 if (pageDistance == 10)
@@ -4082,58 +4307,15 @@ namespace Jvdp.LightDarkroomOverlay
             return success && bytesRead.ToUInt64() == 4;
         }
 
-        private bool TryInvokeSemanticControl(
-            int processId, string exactName, out string detail)
-        {
-            detail = "";
-            foreach (IntPtr handle in FindProcessWindows(processId))
-            {
-                try
-                {
-                    AutomationElement root = AutomationElement.FromHandle(handle);
-                    AutomationElementCollection elements = root.FindAll(
-                        TreeScope.Subtree,
-                        new PropertyCondition(
-                            AutomationElement.NameProperty, exactName));
-                    for (int index = 0; index < elements.Count; index++)
-                    {
-                        if (!elements[index].Current.IsEnabled ||
-                            elements[index].Current.IsOffscreen)
-                            continue;
-                        string method;
-                        if (TryInvokeWithoutCoordinates(elements[index], out method))
-                        {
-                            detail = "UI Automation " + method +
-                                ", window=" + handle;
-                            return true;
-                        }
-                    }
-                }
-                catch { }
-            }
-            return false;
-        }
-
-        private static List<IntPtr> FindProcessWindows(int processId)
+        private static List<IntPtr> FindTopLevelProcessWindows(int processId)
         {
             List<IntPtr> windows = new List<IntPtr>();
             EnumWindowProc collect = delegate(IntPtr handle, IntPtr parameter)
             {
                 uint ownerProcess;
                 GetWindowThreadProcessId(handle, out ownerProcess);
-                if (ownerProcess == (uint)processId && !windows.Contains(handle))
-                {
+                if (ownerProcess == (uint)processId)
                     windows.Add(handle);
-                    EnumChildProc collectChild = delegate(
-                        IntPtr child, IntPtr childParameter)
-                    {
-                        if (!windows.Contains(child))
-                            windows.Add(child);
-                        return true;
-                    };
-                    EnumChildWindows(handle, collectChild, IntPtr.Zero);
-                    GC.KeepAlive(collectChild);
-                }
                 return true;
             };
             EnumWindows(collect, IntPtr.Zero);
@@ -4145,12 +4327,23 @@ namespace Jvdp.LightDarkroomOverlay
             SetManualActionStatus(
                 "Step 3/3 - starting Booth Mode...");
 
+            if (IsIconic(window) || WindowFillsScreen(window))
+            {
+                boothMode = true;
+                Log("Booth Mode was already visible; no start command needed.");
+                return;
+            }
+
             // Leave Event Settings and address Darkroom's own Start Booth
             // command. This is the same semantic command used by Darkroom's
             // Start Booth Mode control, without locating or clicking it.
             SetForegroundWindow(window);
             SendVirtualKey(Keys.Escape);
-            Thread.Sleep(550);
+            WaitForCondition(
+                delegate
+                {
+                    return !IsIconic(window) && !WindowFillsScreen(window);
+                }, 350);
             if (!PostMessage(
                     window, WmCommand,
                     new IntPtr(DarkroomCommandStartBooth), IntPtr.Zero))
@@ -4159,80 +4352,32 @@ namespace Jvdp.LightDarkroomOverlay
             Log("Started Booth Mode through Darkroom command " +
                 DarkroomCommandStartBooth +
                 "; no coordinates or mouse input used.");
-            Thread.Sleep(1600);
+            bool confirmed = WaitForCondition(
+                delegate
+                {
+                    return IsIconic(window) || WindowFillsScreen(window);
+                }, 2200);
+            if (!confirmed)
+                throw new InvalidOperationException(
+                    "Darkroom did not visibly return to Booth Mode in time.");
 
-            boothMode = true;
+            boothMode = confirmed;
             Log("Start Booth Mode command completed.");
         }
-        private static bool TryInvokeWithoutCoordinates(
-            AutomationElement element, out string method)
-        {
-            method = "";
-            try
-            {
-                object pattern;
-                if (element.TryGetCurrentPattern(
-                    InvokePattern.Pattern, out pattern))
-                {
-                    ((InvokePattern)pattern).Invoke();
-                    method = "UI Automation InvokePattern";
-                    return true;
-                }
-                if (element.TryGetCurrentPattern(
-                    SelectionItemPattern.Pattern, out pattern))
-                {
-                    ((SelectionItemPattern)pattern).Select();
-                    method = "UI Automation SelectionItemPattern";
-                    return true;
-                }
-
-            }
-            catch { }
-            return false;
-        }
-        private static AutomationElement FindAutomationElementByName(
-            IntPtr window, string expectedName)
-        {
-            try
-            {
-                AutomationElement root = AutomationElement.FromHandle(window);
-                PropertyCondition exact = new PropertyCondition(
-                    AutomationElement.NameProperty,
-                    expectedName,
-                    PropertyConditionFlags.IgnoreCase);
-                AutomationElement found = root.FindFirst(
-                    TreeScope.Descendants, exact);
-                if (found != null)
-                    return found;
-
-                AutomationElementCollection all = root.FindAll(
-                    TreeScope.Descendants, Condition.TrueCondition);
-                for (int index = 0; index < all.Count; index++)
-                {
-                    string name = all[index].Current.Name;
-                    if (!String.IsNullOrWhiteSpace(name) &&
-                        name.IndexOf(
-                            expectedName,
-                            StringComparison.OrdinalIgnoreCase) >= 0)
-                        return all[index];
-                }
-            }
-            catch { }
-            return null;
-        }
-
         private void LogDarkroomWindowState(
             Process process, IntPtr window)
         {
             try
             {
-                System.Windows.Rect rect = AutomationElement
-                    .FromHandle(window).Current.BoundingRectangle;
+                NativeMethods.Rect rect;
+                if (!GetWindowRect(window, out rect))
+                    throw new InvalidOperationException(
+                        "Darkroom window bounds are unavailable.");
                 Log("Darkroom state: pid=" + process.Id +
                     ", title='" + process.MainWindowTitle +
-                    "', UIA rect=(" + (int)rect.X + "," +
-                    (int)rect.Y + "," + (int)rect.Width + "x" +
-                    (int)rect.Height + ").");
+                    "', native rect=(" + rect.Left + "," +
+                    rect.Top + "," + (rect.Right - rect.Left) + "x" +
+                    (rect.Bottom - rect.Top) + ").");
             }
             catch (Exception exception)
             {
@@ -4240,84 +4385,6 @@ namespace Jvdp.LightDarkroomOverlay
                     exception.Message);
             }
         }
-        private void LogVisibleDarkroomNames(
-            IntPtr window, string reason)
-        {
-            try
-            {
-                AutomationElement root = AutomationElement.FromHandle(window);
-                AutomationElementCollection all = root.FindAll(
-                    TreeScope.Descendants, Condition.TrueCondition);
-                List<string> names = new List<string>();
-                for (int index = 0; index < all.Count && names.Count < 25; index++)
-                {
-                    string name = all[index].Current.Name;
-                    if (!String.IsNullOrWhiteSpace(name) &&
-                        !names.Contains(name))
-                        names.Add(name.Replace("\r", " ").Replace("\n", " "));
-                }
-                Log(reason + ": visible names=[" +
-                    String.Join(" | ", names.ToArray()) + "].");
-            }
-            catch (Exception exception)
-            {
-                Log(reason + ": UI-name logging failed: " +
-                    exception.Message);
-            }
-        }
-        private IntPtr FindIsoControlWithAutomation(IntPtr window)
-        {
-            try
-            {
-                AutomationElement root = AutomationElement.FromHandle(window);
-                AndCondition isoCondition = new AndCondition(
-                    new PropertyCondition(
-                        AutomationElement.AutomationIdProperty, "107"),
-                    new PropertyCondition(
-                        AutomationElement.ClassNameProperty, "ComboBox"));
-                AutomationElement isoElement = root.FindFirst(
-                    TreeScope.Descendants, isoCondition);
-                if (isoElement != null &&
-                    isoElement.Current.NativeWindowHandle != 0 &&
-                    !isoElement.Current.IsOffscreen)
-                {
-                    IntPtr handle = new IntPtr(
-                        isoElement.Current.NativeWindowHandle);
-                    if (IsWindowVisible(handle))
-                    {
-                        Log("Visible ISO control discovered with Windows UI " +
-                            "Automation: automationId=107, handle=" +
-                            handle + ".");
-                        return handle;
-                    }
-                }
-            }
-            catch (Exception exception)
-            {
-                Log("UI Automation ISO discovery failed: " +
-                    exception.Message);
-            }
-
-            IntPtr nativeFallback = FindVisibleChildById(window, 107);
-            if (nativeFallback != IntPtr.Zero)
-                Log("ISO control found by native control ID 107 fallback; " +
-                    "still no coordinates or mouse input used.");
-            return nativeFallback;
-        }
-        private static List<IntPtr> FindChildrenById(IntPtr root, int controlId)
-        {
-            List<IntPtr> found = new List<IntPtr>();
-            EnumChildProc callback = delegate(IntPtr handle, IntPtr parameter)
-            {
-                if (GetDlgCtrlID(handle) == controlId)
-                    found.Add(handle);
-                return true;
-            };
-            EnumChildWindows(root, callback, IntPtr.Zero);
-            GC.KeepAlive(callback);
-            return found;
-        }
-
         private static List<ComboItem> ReadComboItems(IntPtr combo)
         {
             long count = SendMessageWithTimeout(
@@ -4362,10 +4429,31 @@ namespace Jvdp.LightDarkroomOverlay
             return closest;
         }
 
-        private string SelectIsoWithoutCoordinates(
-            IntPtr window, ref IntPtr combo, ComboItem target)
+        private static ComboItem FindTargetComboItem(
+            IntPtr combo, int requestedIso)
         {
-            combo = WaitForStableVisibleChildById(window, 107, 1800);
+            string requested = requestedIso.ToString(
+                CultureInfo.InvariantCulture);
+            int exactIndex = (int)SendMessageWithTimeout(
+                combo, 0x0158, new IntPtr(-1), requested).ToInt64();
+            if (exactIndex >= 0)
+                return new ComboItem(exactIndex, requested);
+
+            // A camera can expose a reduced ISO list. Only enumerate the full
+            // dropdown in that exceptional case to preserve nearest-value
+            // behaviour without making every normal action pay that cost.
+            return FindClosestNumericIso(
+                ReadComboItems(combo), requestedIso);
+        }
+
+        private string SelectIsoWithoutCoordinates(
+            IntPtr window, ref IntPtr combo, ComboItem target,
+            DateTime actionDeadlineUtc)
+        {
+            combo = WaitForStableVisibleChildById(
+                window, 107,
+                Math.Min(1400,
+                    GetRemainingActionMilliseconds(actionDeadlineUtc)));
             if (combo == IntPtr.Zero)
                 throw new InvalidOperationException(
                     "Darkroom ISO control 107 did not remain visibly stable.");
@@ -4374,7 +4462,7 @@ namespace Jvdp.LightDarkroomOverlay
                     combo, 0x014f, new IntPtr(1), IntPtr.Zero))
                 throw new InvalidOperationException(
                     "Darkroom rejected opening the native ISO dropdown.");
-            Thread.Sleep(180);
+            SleepWithinActionDeadline(actionDeadlineUtc, 120);
             int currentIndex = (int)SendMessageWithTimeout(
                 combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
             if (currentIndex < 0)
@@ -4386,24 +4474,26 @@ namespace Jvdp.LightDarkroomOverlay
             for (int step = 0; step < steps; step++)
             {
                 PostComboKey(combo, direction);
-                Thread.Sleep(35);
+                SleepWithinActionDeadline(actionDeadlineUtc, 25);
             }
             Log("Native dropdown reached ISO " + target.Value +
                 "; confirming the highlighted item.");
             PostComboKey(combo, Keys.Enter);
 
-            DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(2000);
+            if (deadline > actionDeadlineUtc)
+                deadline = actionDeadlineUtc;
             while (DateTime.UtcNow < deadline)
             {
                 long selected = SendMessageWithTimeout(
                     combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
                 if (selected == target.Index)
                 {
-                    Thread.Sleep(350);
+                    SleepWithinActionDeadline(actionDeadlineUtc, 200);
                     return "native ComboBox dropdown keyboard selection " +
                         "(coordinate-free, timeout-safe)";
                 }
-                Thread.Sleep(100);
+                Thread.Sleep(80);
             }
             throw new InvalidOperationException(
                 "Darkroom did not accept the ISO dropdown selection in time.");
@@ -4420,42 +4510,44 @@ namespace Jvdp.LightDarkroomOverlay
                 throw new InvalidOperationException(
                     "Darkroom rejected native ISO dropdown keyboard input.");
         }
-        private bool DismissDarkroomPropertyError(IntPtr window)
+        private bool DismissDarkroomPropertyError(
+            int processId, IntPtr mainWindow)
         {
-            try
+            // Only inspect separate visible Darkroom dialogs. The old code
+            // walked the complete main-window accessibility tree ten times,
+            // which could add tens of seconds on a Surface.
+            foreach (IntPtr dialogWindow in
+                FindTopLevelProcessWindows(processId))
             {
-                AutomationElement root = AutomationElement.FromHandle(window);
-                AutomationElement error = root.FindFirst(
-                    TreeScope.Descendants,
-                    new PropertyCondition(
-                        AutomationElement.NameProperty,
-                        "The property could not be set.",
-                        PropertyConditionFlags.IgnoreCase));
-                if (error == null)
-                    return false;
-
-                AutomationElement dialog = error;
-                AutomationElement parent =
-                    TreeWalker.ControlViewWalker.GetParent(dialog);
-                while (parent != null && !parent.Equals(root))
+                if (dialogWindow == mainWindow ||
+                    !IsWindowVisible(dialogWindow))
+                    continue;
+                try
                 {
-                    dialog = parent;
-                    parent = TreeWalker.ControlViewWalker.GetParent(dialog);
-                }
-                int dialogHandle = dialog.Current.NativeWindowHandle;
-                if (dialogHandle != 0)
+                    AutomationElement root =
+                        AutomationElement.FromHandle(dialogWindow);
+                    AutomationElement error = root.FindFirst(
+                        TreeScope.Element | TreeScope.Descendants,
+                        new PropertyCondition(
+                            AutomationElement.NameProperty,
+                            "The property could not be set.",
+                            PropertyConditionFlags.IgnoreCase));
+                    if (error == null)
+                        continue;
+
                     PostMessage(
-                        new IntPtr(dialogHandle), 0x0010,
+                        dialogWindow, 0x0010,
                         IntPtr.Zero, IntPtr.Zero);
-                Log("Darkroom property-error dialog detected and closed.");
-                return true;
+                    Log("Darkroom property-error dialog detected and closed.");
+                    return true;
+                }
+                catch (Exception exception)
+                {
+                    Log("Darkroom property-error dialog check failed: " +
+                        exception.Message);
+                }
             }
-            catch (Exception exception)
-            {
-                Log("Darkroom property-error check failed: " +
-                    exception.Message);
-                return false;
-            }
+            return false;
         }
 
         private static void SendVirtualKey(Keys key)
@@ -4878,8 +4970,16 @@ namespace Jvdp.LightDarkroomOverlay
                 : Color.FromArgb(20, 102, 196);
             UpdateHeaderStatus(sensorConnected, targetIso, ready);
 
+            IntPtr preparedToolbar;
+            IntPtr preparedTarget;
+            bool darkroomControlPrepared =
+                darkroomMainWindow != IntPtr.Zero &&
+                TryGetPreparedDarkroomControl(
+                    darkroomProcessId, darkroomMainWindow,
+                    out preparedToolbar, out preparedTarget);
             bool canApply = !manualActionRunning && sensorConnected &&
-                targetIso > 0 && darkroomRunning;
+                targetIso > 0 && darkroomRunning &&
+                darkroomControlPrepared;
             runActionButton.Enabled = canApply;
             runActionButton.BackColor = canApply
                 ? Color.FromArgb(31, 111, 235)
@@ -4989,9 +5089,24 @@ namespace Jvdp.LightDarkroomOverlay
         {
             if (paused || manualActionRunning || !serialReady ||
                 targetIso <= 0 || !darkroomRunning ||
+                !boothMode ||
                 stableSeconds < stabilitySeconds ||
                 DateTime.Now < nextAutomaticAttemptAt)
                 return;
+
+            IntPtr preparedToolbar;
+            IntPtr preparedTarget;
+            IntPtr currentWindow = darkroomMainWindow;
+            if (currentWindow == IntPtr.Zero ||
+                !TryGetPreparedDarkroomControl(
+                    darkroomProcessId, currentWindow,
+                    out preparedToolbar, out preparedTarget))
+            {
+                if (currentWindow != IntPtr.Zero)
+                    QueueDarkroomControlPreflight(
+                        darkroomProcessId, currentWindow);
+                return;
+            }
 
             if (lastAppliedTargetIso == targetIso &&
                 lastAppliedDarkroomProcessId == darkroomProcessId)
@@ -5030,6 +5145,13 @@ namespace Jvdp.LightDarkroomOverlay
                 return string.Format(
                     "Doel-ISO wordt nog {0:0.0} seconden gecontroleerd.",
                     stabilitySeconds - stableSeconds);
+            IntPtr preparedToolbar;
+            IntPtr preparedTarget;
+            if (darkroomMainWindow != IntPtr.Zero &&
+                !TryGetPreparedDarkroomControl(
+                    darkroomProcessId, darkroomMainWindow,
+                    out preparedToolbar, out preparedTarget))
+                return "Darkroom-bediening wordt op de achtergrond voorbereid.";
             if (lastAppliedTargetIso == targetIso &&
                 lastAppliedDarkroomProcessId == darkroomProcessId)
                 return string.Format(
@@ -5081,6 +5203,7 @@ namespace Jvdp.LightDarkroomOverlay
                 int processId = process.Id;
                 if (darkroomProcessId != processId)
                 {
+                    ClearDarkroomControlCache();
                     darkroomProcessId = processId;
                     currentDarkroomIso = "Unknown";
                     currentIsoReadAt = DateTime.MinValue;
@@ -5093,7 +5216,9 @@ namespace Jvdp.LightDarkroomOverlay
 
                 darkroomRunning = true;
                 IntPtr window = process.MainWindowHandle;
+                darkroomMainWindow = window;
                 boothMode = IsIconic(window) || WindowFillsScreen(window);
+                QueueDarkroomControlPreflight(processId, window);
 
                 IntPtr isoCombo = FindVisibleChildById(window, 107);
                 if (isoCombo != IntPtr.Zero)
@@ -5118,9 +5243,11 @@ namespace Jvdp.LightDarkroomOverlay
 
         private void ResetDarkroomSession()
         {
+            ClearDarkroomControlCache();
             darkroomRunning = false;
             boothMode = false;
             darkroomProcessId = 0;
+            darkroomMainWindow = IntPtr.Zero;
             currentDarkroomIso = "Unknown";
             currentIsoReadAt = DateTime.MinValue;
             lastAppliedTargetIso = 0;
@@ -5243,6 +5370,19 @@ namespace Jvdp.LightDarkroomOverlay
             return result;
         }
 
+        private static IntPtr SendMessageWithTimeout(
+            IntPtr handle, uint message, IntPtr wParam, string lParam)
+        {
+            IntPtr result;
+            IntPtr completed = SendMessageTimeout(
+                handle, message, wParam, lParam,
+                0x0001 | 0x0002, 2000, out result);
+            if (completed == IntPtr.Zero)
+                throw new TimeoutException(
+                    "Darkroom did not search the ISO dropdown within two seconds.");
+            return result;
+        }
+
         private void Log(string message)
         {
             try
@@ -5332,6 +5472,11 @@ namespace Jvdp.LightDarkroomOverlay
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr SendMessageTimeout(
             IntPtr handle, uint message, IntPtr wParam, StringBuilder lParam,
+            uint flags, uint timeoutMilliseconds, out IntPtr result);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr SendMessageTimeout(
+            IntPtr handle, uint message, IntPtr wParam, string lParam,
             uint flags, uint timeoutMilliseconds, out IntPtr result);
 
         [DllImport("oleacc.dll")]

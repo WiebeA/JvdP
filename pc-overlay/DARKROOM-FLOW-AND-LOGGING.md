@@ -1,5 +1,20 @@
 # Darkroom flow and logging
 
+## Fast prepared flow
+
+The current application performs the expensive read-only `CXToolbar` validation in
+the background as soon as a Darkroom process is detected. The validated toolbar and
+command target are reused for the lifetime of that process. The 60-second light/ISO
+stability period therefore does not include an additional toolbar scan at the moment
+the ISO action starts.
+
+The action path uses native child-window enumeration before accessibility APIs,
+addresses Camera directly with command `33082`, finds an exact ISO with
+`CB_FINDSTRINGEXACT`, and checks only separate visible error dialogs after the
+selection. The former ten full accessibility-tree error scans are not part of the
+action anymore. Per-step durations are written as `Darkroom timing:` log records and
+the settings/change phase has a ten-second deadline.
+
 ## Current native flow
 
 Darkroom is never controlled with screen coordinates, synthesized mouse input, sampled pixels or screenshot-relative positions.
