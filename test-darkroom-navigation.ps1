@@ -10,6 +10,7 @@ $taskRunner = Join-Path $taskOutput 'DarkroomNavigationTests.exe'
 & $taskCompiler /nologo /target:exe /optimize+ /platform:anycpu `
     /out:$taskRunner /reference:System.dll /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
+    (Join-Path $taskRoot 'pc-overlay\LightCheckCycle.cs') `
     (Join-Path $taskRoot 'pc-overlay\DarkroomNavigation.cs') `
     (Join-Path $taskRoot 'tools\DarkroomNavigationTests.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Navigation test compilation failed.' }

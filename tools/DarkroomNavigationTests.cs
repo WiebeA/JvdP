@@ -13,6 +13,11 @@ internal static class DarkroomNavigationTests
         internal bool Editor = true;
         internal bool ExitWorks = true;
         internal bool StartWorks = true;
+        internal bool CoversVisible;
+        internal bool Presented;
+        internal bool PresentWorks = true;
+        internal int PresentCalls;
+        internal int PresentAfterAttempts = 1;
         internal bool SettingsOpen;
         internal bool SettingsMenu;
         internal bool OtherDialog;
@@ -30,6 +35,7 @@ internal static class DarkroomNavigationTests
         internal bool UnstableIso;
         private int isoReads;
         public bool BoothVisible { get { return InBooth; } }
+        public bool BoothPresented { get { return InBooth && Presented && !CoversVisible; } }
         public bool EditorAvailable
         {
             get { return Editor && !InBooth && !SettingsMenu && !OtherDialog; }
@@ -76,6 +82,13 @@ internal static class DarkroomNavigationTests
             }
         }
         public void RestoreEditor() { Restores++; Editor = true; }
+        public void PresentBooth()
+        {
+            if (CoversVisible) throw new Exception("Presentation happened before cover removal");
+            if (!InBooth) throw new Exception("Attempted to present only a preview");
+            PresentCalls++;
+            Presented = PresentWorks && PresentCalls >= PresentAfterAttempts;
+        }
         public void SendCommand(int command)
         {
             RequireReady();
@@ -273,6 +286,64 @@ internal static class DarkroomNavigationTests
                 "Tool windows are not booths");
             Check(!NativeDarkroomNavigation.IsBoothSurface(new Rectangle(0, 0, 500, 500),
                 monitor, 0, 0), "Small preview is not Booth Mode");
+
+            FakePort behindDashboard = new FakePort { InBooth = true, CoversVisible = true };
+            n = Create(behindDashboard);
+            n.RevealBooth(delegate { behindDashboard.CoversVisible = false; }, Deadline);
+            Check(behindDashboard.PresentCalls == 1 && behindDashboard.BoothPresented &&
+                behindDashboard.Waited >= 160 && behindDashboard.Commands.Count == 0,
+                "Remove covers, present full background, then confirm stable presentation without restarting Booth");
+
+            FakePort delayedForeground = new FakePort { InBooth = true, PresentAfterAttempts = 2 };
+            Create(delayedForeground).RevealBooth(delegate { }, Deadline);
+            Check(delayedForeground.PresentCalls == 2 && delayedForeground.BoothPresented &&
+                delayedForeground.Commands.Count == 0,
+                "One bounded presentation retry does not send a second Start Booth command");
+
+            FakePort cannotPresent = new FakePort { InBooth = true, PresentWorks = false };
+            Fails(delegate { Create(cannotPresent).RevealBooth(delegate { }, Deadline); },
+                "Booth behind dashboard is not successful return");
+            Check(cannotPresent.PresentCalls == 2 && cannotPresent.Waited <= 1400,
+                "Presentation failure stops with a clear error rather than stealing focus indefinitely");
+
+            FakePort previewOnly = new FakePort { Presented = true, CoversVisible = true };
+            Fails(delegate { Create(previewOnly).RevealBooth(
+                delegate { previewOnly.CoversVisible = false; }, Deadline); }, "Preview without Booth background");
+            Check(previewOnly.PresentCalls == 0 && previewOnly.CoversVisible,
+                "Missing full background is never treated as an acceptable camera-only return");
+
+            DateTime cycleStart = new DateTime(2026, 8, 28, 12, 0, 0);
+            foreach (int seconds in new int[] { 5, 60, 300 })
+            {
+                LightCheckCycle cycle = new LightCheckCycle { TargetIso = 400, StartedAt = cycleStart };
+                for (int round = 0; round < 10; round++)
+                {
+                    DateTime started = cycle.StartedAt;
+                    Check(cycle.ElapsedSeconds(started.AddSeconds(seconds - 1), seconds) == seconds - 1,
+                        "Countdown progresses before completing check " + round);
+                    Check(cycle.CompleteCheck(400, started, started.AddSeconds(seconds)),
+                        "Same ISO completes another light-check cycle " + round);
+                    Check(cycle.ElapsedSeconds(started.AddSeconds(seconds), seconds) == 0,
+                        "Countdown starts again after every check, not just after ISO change");
+                }
+            }
+            LightCheckCycle changedLight = new LightCheckCycle {
+                TargetIso = 3200, StartedAt = cycleStart.AddSeconds(20) };
+            Check(!changedLight.CompleteCheck(400, cycleStart, cycleStart.AddSeconds(60)) &&
+                changedLight.ElapsedSeconds(cycleStart.AddSeconds(60), 60) == 40,
+                "Completing old action does not restart the new target's stability window");
+            changedLight.TargetIso = 400; // Light changed away and returned while action ran.
+            Check(!changedLight.CompleteCheck(400, cycleStart, cycleStart.AddSeconds(60)),
+                "Same ISO in a newer window is not mistaken for the completed old cycle");
+            Check(changedLight.CompleteCheck(400, changedLight.StartedAt, cycleStart.AddSeconds(70)) &&
+                changedLight.ElapsedSeconds(cycleStart.AddSeconds(70), 60) == 0,
+                "Successful ISO action immediately starts its next check");
+            Check(changedLight.ElapsedSeconds(cycleStart, 60) == 0,
+                "Clock adjustment cannot show negative progress");
+            LightCheckCycle noLight = new LightCheckCycle();
+            Check(noLight.ElapsedSeconds(cycleStart, 60) == 0 &&
+                !noLight.CompleteCheck(-1, DateTime.MinValue, cycleStart),
+                "No measurement cannot start a fictitious check cycle");
 
             string menuText = "Global Settings\r\nEvent Info Screens Output\r\n" +
                 "Output Queue Controls Text Timing\r\nSession History Camera Liveview Video\r\n" +

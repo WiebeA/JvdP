@@ -20,8 +20,9 @@ namespace Jvdp.LightDarkroomOverlay
     {
         public readonly object Sync = new object();
         public int Light = -1;
-        public int MappedIso = -1;
-        public DateTime CandidateSince = DateTime.MinValue;
+        public readonly LightCheckCycle CheckCycle = new LightCheckCycle();
+        public int MappedIso { get { return CheckCycle.TargetIso; } set { CheckCycle.TargetIso = value; } }
+        public DateTime CandidateSince { get { return CheckCycle.StartedAt; } set { CheckCycle.StartedAt = value; } }
         public string SerialStatus = "Searching for ESP...";
         public string LastSerialError = "";
     }
@@ -786,7 +787,6 @@ namespace Jvdp.LightDarkroomOverlay
         private volatile bool manualCoverVisible;
         private volatile bool manualActionRunning;
         private volatile bool manualActionFailed;
-        private volatile bool currentActionAutomatic;
         private string manualActionStatus = "";
         private DateTime manualActionStatusUntil = DateTime.MinValue;
         private DateTime nextAutomaticAttemptAt = DateTime.MinValue;
@@ -3311,8 +3311,15 @@ namespace Jvdp.LightDarkroomOverlay
             if (manualActionRunning)
                 return;
             int requestedIso;
+            DateTime requestedSince;
             lock (sensor.Sync)
+            {
+                if (automatic && (paused || sensor.CandidateSince == DateTime.MinValue ||
+                        sensor.CheckCycle.ElapsedSeconds(DateTime.Now, stabilitySeconds) < stabilitySeconds))
+                    return;
                 requestedIso = sensor.MappedIso;
+                requestedSince = sensor.CandidateSince;
+            }
             if (!serialReady || requestedIso <= 0 || !darkroomRunning)
             {
                 manualActionFailed = true;
@@ -3325,7 +3332,6 @@ namespace Jvdp.LightDarkroomOverlay
             }
             manualActionRunning = true;
             manualActionFailed = false;
-            currentActionAutomatic = automatic;
             manualActionStatus = automatic
                 ? "Automatische ISO-aanpassing starten…"
                 : "ISO-aanpassing starten…";
@@ -3336,20 +3342,22 @@ namespace Jvdp.LightDarkroomOverlay
             pauseButton.Enabled = false;
             Log((automatic ? "Automatic" : "Manual") +
                 " PC-mapped target ISO action requested.");
-            Thread worker = new Thread(RunTargetIsoAction);
+            // Keep the target whose stability period was checked. A sensor update
+            // between this thread and the worker must not bypass the new countdown.
+            Thread worker = new Thread(delegate() {
+                RunTargetIsoAction(requestedIso, requestedSince, automatic);
+            });
             worker.IsBackground = true;
             worker.SetApartmentState(ApartmentState.STA);
             worker.Start();
         }
 
-        private void RunTargetIsoAction()
+        private void RunTargetIsoAction(int desiredIso, DateTime checkedSince, bool automatic)
         {
-            bool automatic = currentActionAutomatic;
             Process process = null;
             DarkroomNavigation navigation = null;
             string confirmedIso = null;
             bool selectionAttempted = false;
-            int desiredIso = 0;
             string finalStatus;
             bool failed = false;
             bool coverShown = false;
@@ -3360,8 +3368,6 @@ namespace Jvdp.LightDarkroomOverlay
                 DarkroomActionDeadlineMilliseconds);
             try
             {
-                lock (sensor.Sync)
-                    desiredIso = sensor.MappedIso;
                 if (desiredIso <= 0)
                     throw new InvalidOperationException(
                         "No valid target ISO is available from the PC mapping.");
@@ -3451,6 +3457,11 @@ namespace Jvdp.LightDarkroomOverlay
                     "ISO verified");
                 SetManualActionStatus("Stap 3/3 — Booth Mode starten…");
                 navigation.StartBooth(DateTime.UtcNow.AddSeconds(5));
+                if (!keepCoverVisible)
+                {
+                    navigation.RevealBooth(HideFullscreenCovers, DateTime.UtcNow.AddSeconds(3));
+                    coverShown = false;
+                }
                 boothMode = true;
                 lastAppliedTargetIso = desiredIso;
                 lastAppliedDarkroomProcessId = process.Id;
@@ -3472,6 +3483,11 @@ namespace Jvdp.LightDarkroomOverlay
                     {
                         Log("Fail-safe recovery: restoring Booth Mode...");
                         navigation.StartBooth(DateTime.UtcNow.AddSeconds(5));
+                        if (!keepCoverVisible)
+                        {
+                            navigation.RevealBooth(HideFullscreenCovers, DateTime.UtcNow.AddSeconds(3));
+                            coverShown = false;
+                        }
                         boothMode = true;
                         if (confirmedIso != null)
                         {
@@ -3508,6 +3524,8 @@ namespace Jvdp.LightDarkroomOverlay
             }
             manualActionFailed = failed;
             manualActionStatus = finalStatus;
+            if (!failed)
+                RestartLightCheck(desiredIso, checkedSince);
             Log("Darkroom ISO action finished in " +
                 actionTimer.ElapsedMilliseconds + " ms; result=" +
                 (failed ? "failed" : "success") + ".");
@@ -4366,6 +4384,7 @@ namespace Jvdp.LightDarkroomOverlay
             DateTime candidateSince;
             string serialStatus;
             DateTime lastMeasurement;
+            double stableSeconds;
             lock (sensor.Sync)
             {
                 light = sensor.Light;
@@ -4373,6 +4392,7 @@ namespace Jvdp.LightDarkroomOverlay
                 candidateSince = sensor.CandidateSince;
                 serialStatus = sensor.SerialStatus;
                 lastMeasurement = lastJvdpLineAt;
+                stableSeconds = sensor.CheckCycle.ElapsedSeconds(DateTime.Now, stabilitySeconds);
             }
 
             lightLabel.Text = light >= 0 ? light.ToString() : "—";
@@ -4428,13 +4448,11 @@ namespace Jvdp.LightDarkroomOverlay
                     ? Color.FromArgb(186, 36, 36)
                     : Color.FromArgb(137, 87, 0);
 
-            double stableSeconds = 0.0;
-            if (candidateSince != DateTime.MinValue)
-            {
-                stableSeconds = Math.Min(
-                    stabilitySeconds,
-                    (DateTime.Now - candidateSince).TotalSeconds);
-            }
+            TryStartAutomaticAction(targetIso, stableSeconds, sensorConnected, candidateSince);
+            // A completed check may have started a fresh window. Render its
+            // current countdown now, not a stale 60/60 until the next UI tick.
+            lock (sensor.Sync)
+                stableSeconds = sensor.CheckCycle.ElapsedSeconds(DateTime.Now, stabilitySeconds);
             countdownLabel.Text = string.Format(
                 "{0:0.0} / {1:0.0} sec", stableSeconds, stabilitySeconds);
             progressFill.Width = (int)Math.Round(
@@ -4443,8 +4461,6 @@ namespace Jvdp.LightDarkroomOverlay
             progressFill.BackColor = stableSeconds >= stabilitySeconds
                 ? Color.FromArgb(34, 132, 67)
                 : Color.FromArgb(31, 111, 235);
-
-            TryStartAutomaticAction(targetIso, stableSeconds, sensorConnected);
 
             bool ready = sensorConnected && targetIso > 0 &&
                 darkroomRunning && boothMode && !paused;
@@ -4474,7 +4490,7 @@ namespace Jvdp.LightDarkroomOverlay
             }
             else
             {
-                overallStatusLabel.Text = "Klaar";
+                overallStatusLabel.Text = "Controleert licht";
                 overallStatusLabel.ForeColor = Color.FromArgb(34, 132, 67);
                 modeLabel.Text = "Automatisch actief";
             }
@@ -4511,6 +4527,10 @@ namespace Jvdp.LightDarkroomOverlay
 
             bool showActionStatus =
                 manualActionRunning || DateTime.Now < manualActionStatusUntil;
+            // After a successful adjustment show the new countdown immediately.
+            // Keep errors and a manual result while automatic mode is stopped.
+            if (!manualActionRunning && !manualActionFailed && !paused)
+                showActionStatus = false;
             actionLabel.Text = showActionStatus
                 ? manualActionStatus
                 : BuildActionText(targetIso, stableSeconds, sensorConnected);
@@ -4590,7 +4610,7 @@ namespace Jvdp.LightDarkroomOverlay
         }
 
         private void TryStartAutomaticAction(
-            int targetIso, double stableSeconds, bool serialReady)
+            int targetIso, double stableSeconds, bool serialReady, DateTime candidateSince)
         {
             if (paused || manualActionRunning || !serialReady ||
                 targetIso <= 0 || !darkroomRunning ||
@@ -4598,16 +4618,27 @@ namespace Jvdp.LightDarkroomOverlay
                 DateTime.Now < nextAutomaticAttemptAt)
                 return;
 
-            if (lastAppliedTargetIso == targetIso &&
-                lastAppliedDarkroomProcessId == darkroomProcessId)
+            if (IsTargetIsoAlreadySet(targetIso))
+            {
+                RestartLightCheck(targetIso, candidateSince);
                 return;
-
-            if (String.Equals(
-                    currentDarkroomIso, targetIso.ToString(),
-                    StringComparison.OrdinalIgnoreCase))
-                return;
+            }
 
             StartTargetIsoAction(true);
+        }
+
+        private bool IsTargetIsoAlreadySet(int targetIso)
+        {
+            return (lastAppliedTargetIso == targetIso &&
+                lastAppliedDarkroomProcessId == darkroomProcessId) ||
+                String.Equals(currentDarkroomIso, targetIso.ToString(),
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void RestartLightCheck(int checkedTarget, DateTime checkedSince)
+        {
+            lock (sensor.Sync)
+                sensor.CheckCycle.CompleteCheck(checkedTarget, checkedSince, DateTime.Now);
         }
 
         private void SetStatusLabel(Label label, string text, bool good)
@@ -4631,15 +4662,15 @@ namespace Jvdp.LightDarkroomOverlay
                 return string.Format(
                     "Nieuwe automatische poging over {0:0} seconden.",
                     (nextAutomaticAttemptAt - DateTime.Now).TotalSeconds);
+            if (IsTargetIsoAlreadySet(targetIso))
+                return string.Format(
+                    "Lichtbewaking actief · ISO {0} ingesteld. Volgende lichtcontrole over {1:0} seconden.",
+                    currentDarkroomIso == "Unknown" ? targetIso.ToString() : currentDarkroomIso,
+                    Math.Max(0, stabilitySeconds - stableSeconds));
             if (stableSeconds < stabilitySeconds)
                 return string.Format(
                     "Doel-ISO wordt nog {0:0.0} seconden gecontroleerd.",
                     stabilitySeconds - stableSeconds);
-            if (lastAppliedTargetIso == targetIso &&
-                lastAppliedDarkroomProcessId == darkroomProcessId)
-                return string.Format(
-                    "ISO {0} is automatisch toegepast.",
-                    targetIso);
             if (currentDarkroomIso == "Unknown")
                 return string.Format(
                     "Huidige Darkroom-ISO controleren; doel is ISO {0}.",

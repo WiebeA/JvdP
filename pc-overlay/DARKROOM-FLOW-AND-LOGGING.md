@@ -1,6 +1,6 @@
 # Darkroom flow and logging
 
-## Current flow — 24.5.14
+## Current flow — 24.5.15
 
 The fixed-vtable process-memory scan has been removed. The command destination is
 the unique native editor window owning the toolbar children, including hidden
@@ -48,11 +48,30 @@ If ISO was confirmed but returning fails, the status preserves the confirmed ISO
 and names the Booth Mode failure. An attempted but unconfirmed selection is
 reported as unknown, never as an unchanged ISO.
 
+After a normal start or a recovery start, the automatic covers are removed first.
+The full-size Booth surfaces are then raised with `HWND_TOP` and asynchronous
+positioning (no resize or permanent topmost change), invalidated for repaint, and
+Darkroom is activated. Presentation requires three consecutive observations of a
+foreground Darkroom process with no visible JvdP window covering any full-size
+Booth background. A foreground camera preview alone is insufficient. One bounded
+presentation retry is allowed; this never resends Start Booth or resizes a preview.
+If the user intentionally left the manual cover on, that cover remains on.
+
+The light-check timer now starts its next period after a successful ISO action
+or a completed period requiring no change. The dashboard says `Controleert licht`
+and shows the next light-check countdown instead of remaining on `Klaar` / 60/60.
+Serial readings still arrive continuously; a check with unchanged ISO does not
+leave Booth Mode. New target-ISO changes still start their own full stability
+period. An action captures the exact target and period it validated, and cannot
+reset a newer period which started while that action was running.
+
 `tools/DarkroomNavigationTests.cs` covers page navigation from all eleven starting
 pages both inside and outside Settings, the non-idempotent Settings command,
 existing/late/slow navigation menus, unknown dialogs, duplicate/ambiguous editor
 roots, failed preflight, failed exit/start, missing or unstable ISO controls,
-deadlines, stage-aware status and borderless-versus-captioned windows.
+deadlines, stage-aware status, full-screen presentation after cover removal,
+bounded focus recovery, repeated light-check cycles and preservation of newer
+stability periods, plus borderless-versus-captioned windows.
 Tests use an in-memory fake and never touch the user's desktop or camera.
 The real camera/booth is not exercised by these tests.
 

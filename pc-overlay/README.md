@@ -43,7 +43,14 @@ main window.
    then starts and visibly confirms Booth Mode again. An open Settings navigation
    menu is positively identified and cancelled first. Its HTML title and labels
    are read only for this purpose, with a bounded background reader; other dialogs
-   remain open. Confirmed ISO and failed Booth return are reported separately.
+   remain open. After removing the cover, the full Booth background is brought
+   forward and its presentation checked; the camera preview alone is not enough.
+   Confirmed ISO and failed Booth return are reported separately.
+
+The dashboard continuously counts down the next light-check period, including
+after a successful adjustment or a check which needed no change. It does not
+reopen Darkroom every period when the ISO is already correct. A changed target ISO
+still needs the full configured stability period (60 seconds by default).
 
 The v5 accessibility/MSAA Camera search was removed after the test showed that Darkroom had already opened the native `Photos` settings page and the overlay then terminated during accessibility enumeration. Camera no longer needs to be found as a tile or label.
 

@@ -17,12 +17,14 @@ namespace Jvdp.LightDarkroomOverlay
     internal interface IDarkroomNavigationPort
     {
         bool BoothVisible { get; }
+        bool BoothPresented { get; }
         bool EditorAvailable { get; }
         IntPtr VisibleIsoControl { get; }
         void RequireReady();
         bool TryDismissSettingsMenu(int timeoutMilliseconds);
         void ExitBooth();
         void RestoreEditor();
+        void PresentBooth();
         void SendCommand(int command);
         void Wait(int milliseconds);
     }
@@ -138,6 +140,36 @@ namespace Jvdp.LightDarkroomOverlay
                     "Darkroom heeft nog geen Booth Mode-venster geopend. " +
                     "Controleer een eventuele melding in Darkroom.");
             log("Darkroom Booth window confirmed after Start Booth command.");
+        }
+
+        internal void RevealBooth(Action removeCovers, DateTime deadlineUtc)
+        {
+            Remaining(deadlineUtc);
+            if (!port.BoothVisible)
+                throw new InvalidOperationException(
+                    "Het volledige Darkroom Booth-scherm is nog niet beschikbaar.");
+            // IsWindowVisible also returns true for a window behind our dashboard.
+            // First remove our covers, THEN present the full Booth background. A
+            // floating camera preview alone is not a successful handoff.
+            removeCovers();
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                Remaining(deadlineUtc);
+                port.PresentBooth();
+                int confirmations = 0;
+                if (WaitUntil(delegate
+                    {
+                        confirmations = port.BoothPresented ? confirmations + 1 : 0;
+                        return confirmations >= 3;
+                    }, deadlineUtc, 700))
+                {
+                    log("Full Darkroom Booth screen presented after removing covers.");
+                    return;
+                }
+            }
+            throw new InvalidOperationException(
+                "Booth Mode is gestart, maar het volledige Darkroom-scherm " +
+                "kon niet naar de voorgrond worden gebracht.");
         }
 
         private void EnsureReady(DateTime deadlineUtc)
@@ -297,6 +329,44 @@ namespace Jvdp.LightDarkroomOverlay
         public bool BoothVisible
         {
             get { return FindBoothWindow(processId, EditorWindow) != IntPtr.Zero; }
+        }
+
+        public bool BoothPresented
+        {
+            get
+            {
+                uint foregroundProcess;
+                GetWindowThreadProcessId(GetForegroundWindow(), out foregroundProcess);
+                if (foregroundProcess != (uint)processId)
+                    return false;
+                List<IntPtr> booths = FindBoothWindows(processId, EditorWindow);
+                if (booths.Count == 0)
+                    return false;
+                foreach (IntPtr booth in booths)
+                {
+                    Rect boothRect;
+                    if (!GetWindowRect(booth, out boothRect))
+                        return false;
+                    Rectangle bounds = Rectangle.FromLTRB(
+                        boothRect.Left, boothRect.Top, boothRect.Right, boothRect.Bottom);
+                    // Check the whole background's z-order, not just the process
+                    // owning the foreground camera-preview window.
+                    IntPtr above = GetWindow(booth, 3); // GW_HWNDPREV
+                    for (int count = 0; above != IntPtr.Zero && count < 256; count++)
+                    {
+                        uint owner;
+                        GetWindowThreadProcessId(above, out owner);
+                        Rect rect;
+                        if (owner == GetCurrentProcessId() && IsWindowVisible(above) &&
+                            !IsIconic(above) && GetWindowRect(above, out rect) &&
+                            bounds.IntersectsWith(Rectangle.FromLTRB(
+                                rect.Left, rect.Top, rect.Right, rect.Bottom)))
+                            return false;
+                        above = GetWindow(above, 3);
+                    }
+                }
+                return true;
+            }
         }
 
         public bool EditorAvailable
@@ -487,6 +557,30 @@ namespace Jvdp.LightDarkroomOverlay
                 ShowWindowAsync(EditorWindow, 9);
         }
 
+        public void PresentBooth()
+        {
+            RequireReady();
+            List<IntPtr> booths = FindBoothWindows(processId, EditorWindow);
+            if (booths.Count == 0)
+                throw new InvalidOperationException(
+                    "Alleen een cameravoorvertoning is niet voldoende: " +
+                    "het volledige Booth-scherm ontbreekt.");
+            // Preserve Darkroom's own dimensions and topmost policy. Never
+            // maximize the preview, hide it or make the booth permanently topmost.
+            for (int index = booths.Count - 1; index >= 0; index--)
+            {
+                IntPtr booth = booths[index];
+                if (!SetWindowPos(booth, IntPtr.Zero, 0, 0, 0, 0,
+                        0x4000 | 0x0010 | 0x0001 | 0x0002))
+                    throw new InvalidOperationException(
+                        "Windows kon het volledige Darkroom-scherm niet naar voren plaatsen.");
+                // Invalidate now; let Darkroom paint on its own thread. Do not
+                // synchronously block our UI on its drawing or camera pipeline.
+                RedrawWindow(booth, IntPtr.Zero, IntPtr.Zero, 0x0001 | 0x0080);
+            }
+            SetForegroundWindow(booths[0]);
+        }
+
         public void SendCommand(int command)
         {
             RequireReady();
@@ -510,6 +604,13 @@ namespace Jvdp.LightDarkroomOverlay
 
         internal static IntPtr FindBoothWindow(int processId, IntPtr editor)
         {
+            List<IntPtr> booths = FindBoothWindows(processId, editor);
+            return booths.Count == 0 ? IntPtr.Zero : booths[0];
+        }
+
+        private static List<IntPtr> FindBoothWindows(int processId, IntPtr editor)
+        {
+            List<IntPtr> booths = new List<IntPtr>();
             foreach (IntPtr window in ProcessWindows(processId))
             {
                 if (!IsWindowVisible(window) || IsIconic(window))
@@ -530,9 +631,9 @@ namespace Jvdp.LightDarkroomOverlay
                     rect.Left, rect.Top, rect.Right, rect.Bottom);
                 Rectangle monitor = Screen.FromHandle(window).Bounds;
                 if (IsBoothSurface(bounds, monitor, style, extendedStyle))
-                    return window;
+                    booths.Add(window);
             }
-            return IntPtr.Zero;
+            return booths;
         }
 
         internal static bool IsBoothSurface(
@@ -614,6 +715,14 @@ namespace Jvdp.LightDarkroomOverlay
         [DllImport("user32.dll")] private static extern bool IsChild(IntPtr parent, IntPtr child);
         [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
         [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+        [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr window, IntPtr after,
+            int x, int y, int width, int height, uint flags);
+        [DllImport("user32.dll")]
+        private static extern bool RedrawWindow(IntPtr window, IntPtr rect, IntPtr region, uint flags);
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
         [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr window, int index);
         [DllImport("user32.dll")] private static extern uint MapVirtualKey(uint code, uint type);
