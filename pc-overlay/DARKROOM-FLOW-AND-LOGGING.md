@@ -1,6 +1,6 @@
 # Darkroom flow and logging
 
-## Current flow — 24.5.13
+## Current flow — 24.5.14
 
 The fixed-vtable process-memory scan has been removed. The command destination is
 the unique native editor window owning the toolbar children, including hidden
@@ -12,27 +12,48 @@ accepted; multiple possible editors are rejected before navigation. The transien
 Static analysis of the installed Darkroom 3.01.1434 executable and XPhotoLib proves:
 
 - `CXFrame::OnCmdMsg` routes menu-style commands to its active page.
-- Command `545` (`0x221`) selects the Settings page directly.
+- Command `545` (`0x221`) selects Settings when coming from another tab. Selecting
+  Settings **again** opens its modal navigation picker. It is not idempotent.
 - Commands `660`–`662` are handled on that page; `660` opens a modal Settings picker,
   while `662` advances the current settings page.
 - `33082` is a return value interpreted inside the modal picker, not a standalone
   Camera command handler. Sending it as `WM_COMMAND` is not a direct Camera action.
 
-The implementation therefore sends `545`, then at most ten `662` commands until a
-stable, visible, enabled ISO control `107` appears. All commands use `lParam = 0`
+The implementation reuses an already stable Camera control. Otherwise it sends
+Originals `543`, then Settings `545` to the same native message queue, in order.
+This makes Settings a page transition even when Darkroom was already on another
+Settings subpage. At most ten `662` commands then find a stable, visible, enabled
+ISO control `107`. All commands use `lParam = 0`
 and are addressed to the validated editor. No toolbar pointer, guessed coordinates,
 global Escape key, C++ vtable address or process-memory scan is needed.
+
+An existing Settings picker (including one left open by an older version) is
+handled before Camera navigation and before returning to Booth Mode. Only a
+visible `#32770` dialog owned by this editor, containing an `Internet Explorer_Server`
+with HTML title `menu` and the six expected complete navigation labels, is
+cancelled with `IDCANCEL`. The HTML identity comes from Darkroom's embedded
+`NAVMENU_HTM` resource. Other dialogs, camera errors and unrecognized menus are
+left open. This is a narrowly scoped, read-only HTML identity query, not a full
+UIA/MSAA tree scan or HTML button click. Its single background reader has a
+700 ms caller timeout, cannot send commands and cannot close a window after a
+timeout. The editor must reenable before subsequent commands. ISO children under
+a disabled editor are not accepted as ready controls.
 
 Booth Mode is confirmed through a visible, non-tool, borderless Darkroom surface on
 its display, rather than the editor's minimized state or maximized bounds. Escape
 is posted only to the identified Booth window. Starting Booth Mode sends `33776`
 once to the editor and waits up to five seconds for a visible Booth surface. On
 failure, recovery happens only when this action had left an existing Booth Mode.
+If ISO was confirmed but returning fails, the status preserves the confirmed ISO
+and names the Booth Mode failure. An attempted but unconfirmed selection is
+reported as unknown, never as an unchanged ISO.
 
 `tools/DarkroomNavigationTests.cs` covers page navigation from all eleven starting
-pages, duplicate/ambiguous editor roots, failed preflight, failed exit/start,
-missing or unstable ISO controls, deadlines and borderless-versus-captioned
-windows. Tests use an in-memory fake and never touch the user's desktop or camera.
+pages both inside and outside Settings, the non-idempotent Settings command,
+existing/late/slow navigation menus, unknown dialogs, duplicate/ambiguous editor
+roots, failed preflight, failed exit/start, missing or unstable ISO controls,
+deadlines, stage-aware status and borderless-versus-captioned windows.
+Tests use an in-memory fake and never touch the user's desktop or camera.
 The real camera/booth is not exercised by these tests.
 
 Microsoft's [command-routing documentation](https://learn.microsoft.com/en-us/cpp/mfc/tn021-command-and-message-routing?view=msvc-170)

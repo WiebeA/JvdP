@@ -14,6 +14,14 @@ internal static class DarkroomNavigationTests
         internal bool ExitWorks = true;
         internal bool StartWorks = true;
         internal bool SettingsOpen;
+        internal bool SettingsMenu;
+        internal bool OtherDialog;
+        internal bool CancelWorks = true;
+        internal bool MenuOnExit;
+        internal int MenuOnIsoRead;
+        internal int MenuCloseDelay;
+        internal int MenuCancels;
+        private int closeMenuAt = -1;
         internal int CameraPage = 5;
         internal int Page;
         internal int Exits;
@@ -22,13 +30,21 @@ internal static class DarkroomNavigationTests
         internal bool UnstableIso;
         private int isoReads;
         public bool BoothVisible { get { return InBooth; } }
-        public bool EditorAvailable { get { return Editor && !InBooth; } }
+        public bool EditorAvailable
+        {
+            get { return Editor && !InBooth && !SettingsMenu && !OtherDialog; }
+        }
         public IntPtr VisibleIsoControl
         {
             get
             {
+                isoReads++;
+                if (MenuOnIsoRead > 0 && isoReads == MenuOnIsoRead)
+                    SettingsMenu = true;
+                if (!EditorAvailable)
+                    return IntPtr.Zero;
                 if (UnstableIso)
-                    return new IntPtr(++isoReads);
+                    return new IntPtr(isoReads);
                 return SettingsOpen && Page == CameraPage
                     ? new IntPtr(107) : IntPtr.Zero;
             }
@@ -36,25 +52,56 @@ internal static class DarkroomNavigationTests
         public void RequireReady()
         {
             if (!Ready) throw new InvalidOperationException("No editor");
+            if (!InBooth && (SettingsMenu || OtherDialog))
+                throw new InvalidOperationException("Blocked by dialog");
+        }
+        public bool TryDismissSettingsMenu(int timeoutMilliseconds)
+        {
+            if (!Ready || !SettingsMenu || OtherDialog || !CancelWorks)
+                return false;
+            MenuCancels++;
+            if (MenuCloseDelay == 0)
+                SettingsMenu = false;
+            else
+                closeMenuAt = Waited + MenuCloseDelay;
+            return true;
         }
         public void ExitBooth()
         {
             Exits++;
-            if (ExitWorks) InBooth = false;
+            if (ExitWorks)
+            {
+                InBooth = false;
+                if (MenuOnExit) SettingsMenu = true;
+            }
         }
         public void RestoreEditor() { Restores++; Editor = true; }
         public void SendCommand(int command)
         {
             RequireReady();
             Commands.Add(command);
+            if (command == DarkroomNavigation.OriginalsPageCommand)
+                SettingsOpen = false;
             if (command == DarkroomNavigation.SettingsPageCommand)
+            {
+                // Real Darkroom reselecting Settings opens the modal picker.
+                if (SettingsOpen) SettingsMenu = true;
                 SettingsOpen = true;
+            }
             if (command == DarkroomNavigation.NextSettingsPageCommand)
                 Page = (Page + 1) % 11;
             if (command == DarkroomNavigation.StartBoothCommand && StartWorks)
                 InBooth = true;
         }
-        public void Wait(int milliseconds) { Waited += milliseconds; }
+        public void Wait(int milliseconds)
+        {
+            Waited += milliseconds;
+            if (closeMenuAt >= 0 && Waited >= closeMenuAt)
+            {
+                SettingsMenu = false;
+                closeMenuAt = -1;
+            }
+        }
     }
 
     private static int assertions;
@@ -91,15 +138,72 @@ internal static class DarkroomNavigationTests
 
             for (int page = 0; page < 11; page++)
             {
-                FakePort settings = new FakePort { Page = page };
-                Check(Create(settings).OpenCamera(Deadline) == new IntPtr(107),
-                    "Find camera from page " + page);
-                Check(settings.Commands[0] == 545 && settings.Commands.Count <= 11,
-                    "Open page, not picker, and bound navigation");
-                foreach (int command in settings.Commands)
-                    Check(command == 545 || command == 662,
-                        "Never send picker return value 33082 or toolbar command 660");
+                foreach (bool alreadyInSettings in new bool[] { false, true })
+                {
+                    FakePort settings = new FakePort {
+                        Page = page, SettingsOpen = alreadyInSettings };
+                    Check(Create(settings).OpenCamera(Deadline) == new IntPtr(107),
+                        "Find camera from page " + page + ", Settings=" + alreadyInSettings);
+                    if (settings.Commands.Count > 0)
+                        Check(settings.Commands[0] == 543 && settings.Commands[1] == 545 &&
+                            settings.Commands.Count <= 12,
+                            "Originals before Settings, bounded navigation");
+                    Check(!settings.SettingsMenu && settings.MenuCancels == 0,
+                        "Page navigation does not accidentally open a picker");
+                    foreach (int command in settings.Commands)
+                        Check(command == 543 || command == 545 || command == 662,
+                            "Never send picker return value 33082 or toolbar command 660");
+                }
             }
+
+            FakePort toggle = new FakePort { SettingsOpen = true };
+            toggle.SendCommand(545);
+            Check(toggle.SettingsMenu && !toggle.EditorAvailable,
+                "Fake reproduces the non-idempotent Settings command from Darkroom");
+
+            FakePort menu = new FakePort { SettingsOpen = true, SettingsMenu = true,
+                Page = 5, MenuCloseDelay = 240 };
+            n = Create(menu);
+            Check(n.OpenCamera(Deadline) == new IntPtr(107) && menu.MenuCancels == 1 &&
+                menu.Commands.Count == 0 && menu.Waited >= 240,
+                "Existing picker closes and editor is reenabled before accepting ISO");
+            menu.SettingsMenu = true; // Reported case: ISO set, menu blocks return.
+            n.StartBooth(Deadline);
+            Check(menu.MenuCancels == 2 && menu.InBooth && menu.Commands.Count == 1,
+                "Picker after confirmed ISO is closed before starting Booth Mode");
+
+            FakePort menuAfterExit = new FakePort { InBooth = true, MenuOnExit = true };
+            n = Create(menuAfterExit);
+            n.OpenCamera(Deadline);
+            n.StartBooth(Deadline);
+            Check(menuAfterExit.Exits == 1 && menuAfterExit.MenuCancels == 1 &&
+                menuAfterExit.InBooth, "Picker appearing after leaving Booth Mode is recovered");
+
+            FakePort lateMenu = new FakePort { SettingsOpen = true, Page = 5, MenuOnIsoRead = 2 };
+            n = Create(lateMenu);
+            Check(n.OpenCamera(Deadline) == new IntPtr(107) && lateMenu.MenuCancels == 1,
+                "Late picker cannot make an underlying ISO look ready");
+            n.StartBooth(Deadline);
+            Check(lateMenu.InBooth, "Booth starts after late picker recovery");
+
+            FakePort unknownDialog = new FakePort { OtherDialog = true };
+            n = Create(unknownDialog);
+            Fails(delegate { n.OpenCamera(Deadline); }, "Unrecognized dialog");
+            Fails(delegate { n.StartBooth(Deadline); }, "Unrecognized dialog on return");
+            Check(unknownDialog.Commands.Count == 0 && unknownDialog.MenuCancels == 0,
+                "Never cancel camera errors, confirmation or other dialogs");
+
+            FakePort cannotCancel = new FakePort { SettingsMenu = true, CancelWorks = false };
+            n = Create(cannotCancel);
+            Fails(delegate { n.StartBooth(Deadline); }, "Unresponsive picker");
+            Check(cannotCancel.Commands.Count == 0 && cannotCancel.SettingsMenu,
+                "Unreadable or unresponsive picker does not receive blind commands");
+
+            FakePort slowCancel = new FakePort { SettingsMenu = true, MenuCloseDelay = 2000 };
+            n = Create(slowCancel);
+            Fails(delegate { n.StartBooth(Deadline); }, "Picker does not reenable editor in time");
+            Check(slowCancel.Commands.Count == 0 && slowCancel.MenuCancels == 1 &&
+                slowCancel.Waited == 1000, "Bounded menu close, no repeated Cancel or Start");
 
             FakePort booth = new FakePort { InBooth = true, Editor = false };
             n = Create(booth);
@@ -124,7 +228,7 @@ internal static class DarkroomNavigationTests
             FakePort noCamera = new FakePort { CameraPage = -1 };
             n = Create(noCamera);
             Fails(delegate { n.OpenCamera(Deadline); }, "Missing camera");
-            Check(noCamera.Commands.Count == 11 && noCamera.Waited <= 4800 &&
+            Check(noCamera.Commands.Count == 12 && noCamera.Waited <= 4800 &&
                 !n.ShouldRestoreBooth, "No infinite page cycle or unsolicited recovery");
 
             FakePort flickeringControl = new FakePort { UnstableIso = true };
@@ -169,6 +273,34 @@ internal static class DarkroomNavigationTests
                 "Tool windows are not booths");
             Check(!NativeDarkroomNavigation.IsBoothSurface(new Rectangle(0, 0, 500, 500),
                 monitor, 0, 0), "Small preview is not Booth Mode");
+
+            string menuText = "Global Settings\r\nEvent Info Screens Output\r\n" +
+                "Output Queue Controls Text Timing\r\nSession History Camera Liveview Video\r\n" +
+                "Help Slideshow Device Control Wrap Up\r\nStart Booth Mode";
+            Check(NativeDarkroomNavigation.IsSettingsMenuContent("menu", menuText),
+                "Recognize the supplied Darkroom Settings menu");
+            Check(NativeDarkroomNavigation.IsSettingsMenuContent(" MENU ", menuText.Replace(" ", "  ")),
+                "Menu detection tolerates whitespace and case");
+            Check(!NativeDarkroomNavigation.IsSettingsMenuContent("Camera error", menuText),
+                "A different dialog title cannot pass menu recognition");
+            Check(!NativeDarkroomNavigation.IsSettingsMenuContent("menu", "The property could not be set."),
+                "Camera errors are not navigation menus");
+            Check(!NativeDarkroomNavigation.IsSettingsMenuContent("menu", menuText.Replace("Camera", "CameraError")),
+                "Menu detection requires complete labels, not substrings");
+            Check(!NativeDarkroomNavigation.IsSettingsMenuContent(null, null), "No content is not a menu");
+            foreach (string label in new string[] { "Start Booth Mode", "Global Settings", "Camera",
+                    "Output Queue", "Session History", "Event Info" })
+                Check(!NativeDarkroomNavigation.IsSettingsMenuContent("menu", menuText.Replace(label, "")),
+                    "All menu identity labels required: " + label);
+
+            string afterIso = DarkroomActionStatus.Failure("3200", true, "Blocked by dialog");
+            Check(afterIso.Contains("ISO 3200 is door Darkroom bevestigd") &&
+                afterIso.Contains("Booth Mode") && !afterIso.Contains("niet gewijzigd"),
+                "Return failure preserves confirmed ISO instead of claiming no change");
+            Check(DarkroomActionStatus.Failure(null, true, "Timeout").Contains("niet bevestigd"),
+                "Unconfirmed selection is reported as unknown, not unchanged");
+            Check(DarkroomActionStatus.Failure(null, false, "No editor").Contains("voordat"),
+                "Preflight failure distinguished from selection or return failure");
             Console.WriteLine("PASS: " + assertions + " navigation assertions; no desktop or camera input.");
             return 0;
         }

@@ -3347,6 +3347,9 @@ namespace Jvdp.LightDarkroomOverlay
             bool automatic = currentActionAutomatic;
             Process process = null;
             DarkroomNavigation navigation = null;
+            string confirmedIso = null;
+            bool selectionAttempted = false;
+            int desiredIso = 0;
             string finalStatus;
             bool failed = false;
             bool coverShown = false;
@@ -3357,7 +3360,6 @@ namespace Jvdp.LightDarkroomOverlay
                 DarkroomActionDeadlineMilliseconds);
             try
             {
-                int desiredIso;
                 lock (sensor.Sync)
                     desiredIso = sensor.MappedIso;
                 if (desiredIso <= 0)
@@ -3409,6 +3411,7 @@ namespace Jvdp.LightDarkroomOverlay
                     combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
                 if (currentIndex == target.Index)
                 {
+                    confirmedIso = target.Value;
                     currentDarkroomIso = target.Value;
                     currentIsoReadAt = DateTime.Now;
                     finalStatus = "No change - Darkroom is already at target ISO " +
@@ -3419,6 +3422,7 @@ namespace Jvdp.LightDarkroomOverlay
                 {
                     SetManualActionStatus(
                         "Stap 2/3 — ISO " + target.Value + " toepassen…");
+                    selectionAttempted = true;
                     string selectionMethod = SelectIsoWithoutCoordinates(
                         window, ref combo, target, actionDeadlineUtc);
                     Log("ISO selection method: " + selectionMethod + ".");
@@ -3434,6 +3438,7 @@ namespace Jvdp.LightDarkroomOverlay
                         throw new InvalidOperationException(
                             "Darkroom did not confirm target ISO " +
                             target.Value + ".");
+                    confirmedIso = confirmed;
                     currentDarkroomIso = confirmed;
                     currentIsoReadAt = DateTime.Now;
                     finalStatus = "Done - Darkroom ISO now matches target ISO " +
@@ -3458,7 +3463,8 @@ namespace Jvdp.LightDarkroomOverlay
             catch (Exception exception)
             {
                 failed = true;
-                finalStatus = "ISO-aanpassing gestopt: " + exception.Message;
+                finalStatus = DarkroomActionStatus.Failure(
+                    confirmedIso, selectionAttempted, exception.Message);
                 Log(finalStatus);
                 if (navigation != null && navigation.ShouldRestoreBooth)
                 {
@@ -3467,7 +3473,16 @@ namespace Jvdp.LightDarkroomOverlay
                         Log("Fail-safe recovery: restoring Booth Mode...");
                         navigation.StartBooth(DateTime.UtcNow.AddSeconds(5));
                         boothMode = true;
-                        finalStatus += " Booth Mode is hersteld.";
+                        if (confirmedIso != null)
+                        {
+                            failed = false;
+                            lastAppliedTargetIso = desiredIso;
+                            lastAppliedDarkroomProcessId = process.Id;
+                            finalStatus = "ISO " + confirmedIso +
+                                " is door Darkroom bevestigd. Booth Mode is hersteld.";
+                        }
+                        else
+                            finalStatus += " Booth Mode is hersteld.";
                         Log("Fail-safe recovery completed.");
                     }
                     catch (Exception recoveryException)

@@ -9,7 +9,7 @@ the application completely.
 
 ## Current build
 
-The current build version comes from the repository VERSION file. It controls Darkroom without coordinates, cursor movement, mouse clicks, DOM or MSAA.
+The current build version comes from the repository VERSION file. It controls Darkroom without coordinates, cursor movement, mouse clicks or full accessibility-tree scans.
 
 Automatic mode is the default. Once the PC-mapped target has remained unchanged for
 the configured stability period (60 seconds by default) and Darkroom Booth is
@@ -31,8 +31,8 @@ main window.
    changing anything. Temporary Booth windows are not used as command targets.
 2. If Booth Mode is visible, sends Escape to that specific Darkroom window's
    message queue. No global keyboard input or foreground-window change is used.
-3. Opens the Settings **page** with menu-style command `545`, bypassing the
-   Settings picker and its private toolbar objects entirely.
+3. Reuses an already stable Camera page, or sends Originals `543` then Settings
+   `545` in order. Reselecting Settings alone would open a modal menu instead.
 4. Advances through at most ten native settings pages with command `662`.
    `33082` is a Settings picker return value, not a Camera command handler.
 5. Stops when enabled, visible ISO ComboBox `107` supports native ComboBox queries
@@ -40,7 +40,10 @@ main window.
 6. Finds the requested ISO with one exact native ComboBox lookup. The full list is
    read only when the connected camera does not offer that exact ISO.
 7. Confirms the selected ISO, checks only separate visible Darkroom error dialogs,
-   then starts and visibly confirms Booth Mode again.
+   then starts and visibly confirms Booth Mode again. An open Settings navigation
+   menu is positively identified and cancelled first. Its HTML title and labels
+   are read only for this purpose, with a bounded background reader; other dialogs
+   remain open. Confirmed ISO and failed Booth return are reported separately.
 
 The v5 accessibility/MSAA Camera search was removed after the test showed that Darkroom had already opened the native `Photos` settings page and the overlay then terminated during accessibility enumeration. Camera no longer needs to be found as a tile or label.
 

@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -17,14 +20,29 @@ namespace Jvdp.LightDarkroomOverlay
         bool EditorAvailable { get; }
         IntPtr VisibleIsoControl { get; }
         void RequireReady();
+        bool TryDismissSettingsMenu(int timeoutMilliseconds);
         void ExitBooth();
         void RestoreEditor();
         void SendCommand(int command);
         void Wait(int milliseconds);
     }
 
+    internal static class DarkroomActionStatus
+    {
+        internal static string Failure(string confirmedIso, bool selectionAttempted, string error)
+        {
+            if (!String.IsNullOrEmpty(confirmedIso))
+                return "ISO " + confirmedIso + " is door Darkroom bevestigd, maar " +
+                    "terugkeren naar Booth Mode is niet gelukt: " + error;
+            return selectionAttempted
+                ? "ISO-aanpassing niet afgerond; de uiteindelijke ISO is niet bevestigd. " + error
+                : "ISO-aanpassing gestopt voordat de ISO-keuze is verstuurd: " + error;
+        }
+    }
+
     internal sealed class DarkroomNavigation
     {
+        internal const int OriginalsPageCommand = 0x021F;
         internal const int SettingsPageCommand = 0x0221;
         internal const int NextSettingsPageCommand = 0x0296;
         internal const int StartBoothCommand = 0x83F0;
@@ -46,7 +64,7 @@ namespace Jvdp.LightDarkroomOverlay
             Remaining(deadlineUtc);
             // All readiness checks precede the first command. In particular,
             // failure to identify the editor must not take a working booth down.
-            port.RequireReady();
+            EnsureReady(deadlineUtc);
             StartedInBooth = port.BoothVisible;
             NavigationStarted = true;
             if (StartedInBooth)
@@ -61,6 +79,7 @@ namespace Jvdp.LightDarkroomOverlay
             }
             if (!port.EditorAvailable)
                 port.RestoreEditor();
+            EnsureReady(deadlineUtc);
             if (!WaitUntil(delegate { return port.EditorAvailable; },
                     deadlineUtc, 1500))
                 throw new InvalidOperationException(
@@ -71,11 +90,12 @@ namespace Jvdp.LightDarkroomOverlay
             if (combo != IntPtr.Zero)
                 return combo;
 
-            // 0x221 is the Settings *page*, not 0x294, which opens a modal
-            // Settings picker. 33082 is a return value of that picker, not a
-            // command handler. Menu-style WM_COMMAND is routed by CXFrame to
-            // the current page; it does not require a CXToolbar pointer.
-            log("Opening the Darkroom Settings page through command 545.");
+            // Selecting Settings AGAIN opens its modal picker. First select
+            // Originals so this is a page transition, not a repeated selection.
+            // Both commands go to the same native queue, in this order. Neither
+            // depends on focus, timing a mouse click or a private toolbar object.
+            log("Opening Settings through Originals -> Settings (543 -> 545).");
+            port.SendCommand(OriginalsPageCommand);
             port.SendCommand(SettingsPageCommand);
             combo = WaitForIso(deadlineUtc, 500);
             if (combo != IntPtr.Zero)
@@ -86,6 +106,7 @@ namespace Jvdp.LightDarkroomOverlay
             for (int page = 1; page <= 10; page++)
             {
                 Remaining(deadlineUtc);
+                EnsureReady(deadlineUtc);
                 port.SendCommand(NextSettingsPageCommand);
                 log("Darkroom settings page advance " + page + "/10.");
                 combo = WaitForIso(deadlineUtc, 400);
@@ -100,7 +121,7 @@ namespace Jvdp.LightDarkroomOverlay
         internal void StartBooth(DateTime deadlineUtc)
         {
             Remaining(deadlineUtc);
-            port.RequireReady();
+            EnsureReady(deadlineUtc);
             if (port.BoothVisible)
                 return;
             if (!port.EditorAvailable)
@@ -109,14 +130,33 @@ namespace Jvdp.LightDarkroomOverlay
                     "het hoofdvenster is geblokkeerd of niet beschikbaar.");
             // A queued Start must not be sent a second time by recovery if the
             // visible confirmation is late; its outcome is then unknown.
-            boothStartRequested = true;
             port.SendCommand(StartBoothCommand);
+            boothStartRequested = true;
             if (!WaitUntil(delegate { return port.BoothVisible; },
                     deadlineUtc, 5000))
                 throw new InvalidOperationException(
                     "Darkroom heeft nog geen Booth Mode-venster geopend. " +
                     "Controleer een eventuele melding in Darkroom.");
             log("Darkroom Booth window confirmed after Start Booth command.");
+        }
+
+        private void EnsureReady(DateTime deadlineUtc)
+        {
+            // A Settings picker is navigation, not a camera error. Dismiss only
+            // that positively identified popup; never press Escape on an unknown
+            // dialog. This also handles a picker left open by an older version.
+            int remaining = Remaining(deadlineUtc);
+            if (!port.BoothVisible && !port.EditorAvailable &&
+                port.TryDismissSettingsMenu(Math.Min(700, remaining)))
+            {
+                log("Recognized Darkroom Settings menu; cancelling navigation popup.");
+                if (!WaitUntil(delegate { return port.EditorAvailable; },
+                        deadlineUtc, 1000))
+                    throw new InvalidOperationException(
+                        "Het Darkroom-instellingenmenu is gesloten, maar het " +
+                        "hoofdvenster is nog niet beschikbaar.");
+            }
+            port.RequireReady();
         }
 
         internal bool ShouldRestoreBooth
@@ -135,6 +175,7 @@ namespace Jvdp.LightDarkroomOverlay
             IntPtr found = IntPtr.Zero;
             WaitUntil(delegate
             {
+                EnsureReady(deadlineUtc);
                 IntPtr current = port.VisibleIsoControl;
                 confirmations = current != IntPtr.Zero && current == previous
                     ? confirmations + 1 : (current == IntPtr.Zero ? 0 : 1);
@@ -179,13 +220,14 @@ namespace Jvdp.LightDarkroomOverlay
         private const int ToolbarControlId = 4083;
         private const int IsoControlId = 107;
         private readonly int processId;
+        private static int menuReadInProgress;
         internal IntPtr EditorWindow { get; private set; }
 
         internal NativeDarkroomNavigation(int processId)
         {
             this.processId = processId;
             EditorWindow = FindEditor(processId);
-            RequireReady();
+            RequireEditorIdentity();
         }
 
         // Both Darkroom toolbars share ID 4083. Their common top-level owner,
@@ -234,18 +276,22 @@ namespace Jvdp.LightDarkroomOverlay
 
         public void RequireReady()
         {
+            RequireEditorIdentity();
+            if (!IsWindowEnabled(EditorWindow) && !BoothVisible)
+                throw new InvalidOperationException(
+                    "Darkroom wacht op een ander dialoogvenster. " +
+                    "Dit venster wordt niet automatisch gesloten.");
+        }
+
+        private void RequireEditorIdentity()
+        {
             uint owner;
             if (EditorWindow == IntPtr.Zero || !IsWindow(EditorWindow) ||
                 GetWindowThreadProcessId(EditorWindow, out owner) == 0 ||
                 owner != (uint)processId)
                 throw new InvalidOperationException(
                     "Het Darkroom-hoofdvenster kon niet eenduidig worden gevonden. " +
-                    "Open eerst het gewenste event in Darkroom. " +
-                    "Booth Mode en ISO zijn niet gewijzigd.");
-            if (!IsWindowEnabled(EditorWindow) && !BoothVisible)
-                throw new InvalidOperationException(
-                    "Darkroom wacht op een dialoogvenster. Sluit dit eerst; " +
-                    "de ISO is niet gewijzigd.");
+                    "Open eerst het gewenste event in Darkroom.");
         }
 
         public bool BoothVisible
@@ -270,7 +316,155 @@ namespace Jvdp.LightDarkroomOverlay
 
         internal static IntPtr FindVisibleIsoControl(IntPtr editor)
         {
+            // Child windows can report enabled even while their modal owner is
+            // disabled. Never accept the ISO underneath a popup as usable.
+            if (editor == IntPtr.Zero || !IsWindowVisible(editor) ||
+                !IsWindowEnabled(editor) || IsIconic(editor))
+                return IntPtr.Zero;
             return FindChild(editor, IsoControlId, true, true);
+        }
+
+        public bool TryDismissSettingsMenu(int timeoutMilliseconds)
+        {
+            RequireEditorIdentity();
+            if (IsWindowEnabled(EditorWindow) || BoothVisible)
+                return false;
+            Stopwatch timer = Stopwatch.StartNew();
+            foreach (IntPtr dialog in ProcessWindows(processId))
+            {
+                if (!IsOwnedDialog(dialog))
+                    continue;
+                IntPtr browser = FindHtmlWindow(dialog);
+                int remaining = timeoutMilliseconds - (int)timer.ElapsedMilliseconds;
+                if (browser == IntPtr.Zero || remaining <= 0)
+                    continue;
+                if (!ReadSettingsMenu(browser, remaining))
+                    continue;
+                // The reader is read-only, and a timeout can never close a later
+                // dialog. Revalidate ownership and HWNDs immediately before cancel.
+                if (!IsOwnedDialog(dialog) || !IsWindowEnabled(dialog) ||
+                    !IsChild(dialog, browser) || IsWindowEnabled(EditorWindow))
+                    return false;
+                PostChecked(dialog, 0x0111, new IntPtr(2), IntPtr.Zero); // IDCANCEL
+                return true;
+            }
+            return false;
+        }
+
+        private bool IsOwnedDialog(IntPtr dialog)
+        {
+            uint ownerProcess;
+            if (!IsWindowVisible(dialog) ||
+                !String.Equals(ClassName(dialog), "#32770", StringComparison.Ordinal) ||
+                GetWindowThreadProcessId(dialog, out ownerProcess) == 0 ||
+                ownerProcess != (uint)processId)
+                return false;
+            IntPtr owner = GetWindow(dialog, 4); // GW_OWNER
+            for (int depth = 0; owner != IntPtr.Zero && depth < 8; depth++)
+            {
+                if (owner == EditorWindow)
+                    return true;
+                owner = GetWindow(owner, 4);
+            }
+            return false;
+        }
+
+        private static IntPtr FindHtmlWindow(IntPtr dialog)
+        {
+            IntPtr result = IntPtr.Zero;
+            EnumProc callback = delegate(IntPtr child, IntPtr unused)
+            {
+                if (IsWindowVisible(child) && String.Equals(ClassName(child),
+                        "Internet Explorer_Server", StringComparison.Ordinal))
+                {
+                    result = child;
+                    return false;
+                }
+                return true;
+            };
+            EnumChildWindows(dialog, callback, IntPtr.Zero);
+            GC.KeepAlive(callback);
+            return result;
+        }
+
+        // The native Settings picker is an HTML dialog (NAVMENU_HTM, title
+        // "menu"). Read only that popup, never the full UIA/MSAA tree. Cross-
+        // process COM may stall: one bounded background reader keeps the action
+        // responsive, and cannot send commands even if it completes too late.
+        private static bool ReadSettingsMenu(IntPtr browser, int timeoutMilliseconds)
+        {
+            if (Interlocked.CompareExchange(ref menuReadInProgress, 1, 0) != 0)
+                return false;
+            bool recognized = false;
+            Thread reader = new Thread(delegate()
+            {
+                object document = null;
+                object body = null;
+                try
+                {
+                    uint message = RegisterWindowMessage("WM_HTML_GETOBJECT");
+                    IntPtr result;
+                    if (message == 0 || SendMessageTimeout(browser, message,
+                            IntPtr.Zero, IntPtr.Zero, 0x0003, 200, out result) == IntPtr.Zero ||
+                        result == IntPtr.Zero)
+                        return;
+                    Guid documentInterface = new Guid("332C4425-26CB-11D0-B483-00C04FD90119");
+                    if (ObjectFromLresult(result, ref documentInterface,
+                            IntPtr.Zero, out document) != 0 || document == null)
+                        return;
+                    string title = Convert.ToString(HtmlProperty(document, "title"));
+                    if (!String.Equals(title.Trim(), "menu", StringComparison.OrdinalIgnoreCase))
+                        return;
+                    body = HtmlProperty(document, "body");
+                    if (body != null)
+                        recognized = IsSettingsMenuContent(title,
+                            Convert.ToString(HtmlProperty(body, "innerText")));
+                }
+                catch (Exception) { /* Unrecognized/unreadable dialogs stay open. */ }
+                finally
+                {
+                    try { ReleaseHtmlObject(body); ReleaseHtmlObject(document); }
+                    finally { Interlocked.Exchange(ref menuReadInProgress, 0); }
+                }
+            });
+            reader.IsBackground = true;
+            reader.SetApartmentState(ApartmentState.STA);
+            try { reader.Start(); }
+            catch
+            {
+                Interlocked.Exchange(ref menuReadInProgress, 0);
+                throw;
+            }
+            return reader.Join(Math.Max(1, timeoutMilliseconds)) && recognized;
+        }
+
+        private static object HtmlProperty(object target, string property)
+        {
+            return target.GetType().InvokeMember(property, BindingFlags.GetProperty,
+                null, target, null);
+        }
+
+        private static void ReleaseHtmlObject(object value)
+        {
+            try
+            {
+                if (value != null && Marshal.IsComObject(value))
+                    Marshal.ReleaseComObject(value);
+            }
+            catch (Exception) { /* Do not terminate the app on COM cleanup failure. */ }
+        }
+
+        internal static bool IsSettingsMenuContent(string title, string body)
+        {
+            if (String.IsNullOrEmpty(title) || String.IsNullOrEmpty(body) ||
+                !String.Equals(title.Trim(), "menu", StringComparison.OrdinalIgnoreCase))
+                return false;
+            string text = " " + Regex.Replace(body, @"\s+", " ").Trim() + " ";
+            foreach (string label in new string[] { "Start Booth Mode", "Global Settings",
+                    "Camera", "Output Queue", "Session History", "Event Info" })
+                if (text.IndexOf(" " + label + " ", StringComparison.OrdinalIgnoreCase) < 0)
+                    return false;
+            return true;
         }
 
         public void ExitBooth()
@@ -417,6 +611,7 @@ namespace Jvdp.LightDarkroomOverlay
         [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr window);
+        [DllImport("user32.dll")] private static extern bool IsChild(IntPtr parent, IntPtr child);
         [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
         [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
@@ -427,6 +622,11 @@ namespace Jvdp.LightDarkroomOverlay
         private static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int GetClassName(IntPtr window, StringBuilder name, int count);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint RegisterWindowMessage(string name);
+        [DllImport("oleacc.dll")]
+        private static extern int ObjectFromLresult(IntPtr result, ref Guid interfaceId,
+            IntPtr wParam, [MarshalAs(UnmanagedType.Interface)] out object document);
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll", SetLastError = true)]
