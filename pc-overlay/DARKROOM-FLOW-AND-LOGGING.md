@@ -1,6 +1,37 @@
 # Darkroom flow and logging
 
-## Current flow — 24.5.15
+## Current flow — 24.5.16
+
+### Crash prevention and reopening
+
+The reported Windows message, `A new guard page for the stack cannot be created`,
+identifies a stack-overflow failure. No crash dump from the affected booth is
+available, so the exact failing call is not proven. The remaining UI Automation
+error-dialog scan was a risky path: it could traverse providers for any separate
+Darkroom window, including preview windows. That scan and the application's
+UIAutomationClient/UIAutomationTypes references have been removed.
+
+Camera property errors now use only native HWND/text queries on visible `#32770`
+dialogs owned by the validated Darkroom editor. Reads share a 350 ms budget,
+inspect at most 64 controls per dialog and time out individually after at most
+40 ms. Only the exact known property-error message permits closing that dialog;
+unknown dialogs remain open and block further navigation. Dashboard refresh also
+rejects recursive entry instead of adding more refresh calls to the stack.
+
+The installer creates a per-user Start-menu shortcut to the stable installed
+executable, with no `--startup` argument. Updates replace that same shortcut and
+the installed app repairs it when launched. Duplicate manual starts ask the
+existing dashboard to show with a bounded native message. If it cannot respond,
+the user can explicitly authorize restarting only a process with the same
+executable path and Windows session. A failed recovery is reported instead of
+silently discarding the launch. No Darkroom process is terminated.
+
+`test-desktop-integration.ps1` tests a real shortcut in an isolated install
+directory, verifies its dashboard-launch arguments, checks removed UI Automation
+assembly references, and simulates healthy, crashed and unresponsive instance
+activation without changing the real Start menu or controlling running apps.
+
+### ISO navigation and presentation
 
 The fixed-vtable process-memory scan has been removed. The command destination is
 the unique native editor window owning the toolbar children, including hidden
@@ -114,6 +145,10 @@ ISO state: ESP target=..., Darkroom current=..., available choices=...
 ## Log location
 
 `%LOCALAPPDATA%\JvdP\LightDarkroomOverlay\overlay.log`
+
+Shortcut repair failures, instance activation/recovery and unhandled managed
+exceptions are logged to `startup.log` in that same directory. A native stack
+overflow may terminate the process before managed exception logging can run.
 
 Old lines remain in this append-only log and may describe removed v1-v5 implementations.
 ## v7 ISO persistence

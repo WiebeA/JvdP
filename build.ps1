@@ -26,22 +26,6 @@ if (-not $csc) {
     throw 'The .NET Framework C# compiler was not found.'
 }
 
-function Resolve-FrameworkAssembly([string]$name) {
-    $gacRoot = Join-Path $env:WINDIR 'Microsoft.NET\assembly\GAC_MSIL'
-    $assembly = Get-ChildItem -LiteralPath (Join-Path $gacRoot $name) `
-        -Recurse -File -Filter "$name.dll" -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if (-not $assembly) {
-        throw "Required .NET Framework assembly was not found: $name"
-    }
-    return $assembly.FullName
-}
-
-$uiAutomationClient = Resolve-FrameworkAssembly 'UIAutomationClient'
-$uiAutomationTypes = Resolve-FrameworkAssembly 'UIAutomationTypes'
-$windowsBase = Resolve-FrameworkAssembly 'WindowsBase'
-
 function ConvertTo-CSharpLiteral([string]$value) {
     return $value.Replace('\', '\\').Replace('"', '\"')
 }
@@ -105,10 +89,9 @@ if (-not (Test-Path -LiteralPath $overlayConfigSource)) {
     /reference:System.dll `
     /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
-    /reference:$uiAutomationClient `
-    /reference:$uiAutomationTypes `
-    /reference:$windowsBase `
     $overlayBuildInfo `
+    (Join-Path $projectRoot 'shared\StartMenuShortcut.cs') `
+    (Join-Path $projectRoot 'pc-overlay\InstanceActivation.cs') `
     (Join-Path $projectRoot 'pc-overlay\LightCheckCycle.cs') `
     (Join-Path $projectRoot 'pc-overlay\DarkroomNavigation.cs') `
     (Join-Path $projectRoot 'pc-overlay\LightDarkroomOverlay.cs')
@@ -136,6 +119,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
     ("/resource:{0},JvdpLightDarkroomOverlay.exe.config" -f $overlayConfig) `
     ("/resource:{0},JvdpAutoUpdater.exe" -f $updaterExe) `
     $installerBuildInfo `
+    (Join-Path $projectRoot 'shared\StartMenuShortcut.cs') `
     (Join-Path $projectRoot 'installer\InstallerProgram.cs') `
     (Join-Path $projectRoot 'installer\InstallOperations.cs') `
     (Join-Path $projectRoot 'installer\RegistryOperations.cs') `

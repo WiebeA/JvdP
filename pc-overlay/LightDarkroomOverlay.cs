@@ -12,7 +12,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
-using System.Windows.Automation;
 
 namespace Jvdp.LightDarkroomOverlay
 {
@@ -827,6 +826,7 @@ namespace Jvdp.LightDarkroomOverlay
         private List<IsoBand> customIsoBands;
         private bool updatingMappingControls;
         private int darkroomProbeActive;
+        private int uiRefreshActive;
         private bool useCustomCoverText;
         private string customCoverTitle = DefaultCoverTitle;
         private string customCoverMessage = DefaultCoverMessage;
@@ -3433,10 +3433,12 @@ namespace Jvdp.LightDarkroomOverlay
                         window, ref combo, target, actionDeadlineUtc);
                     Log("ISO selection method: " + selectionMethod + ".");
                     SleepWithinActionDeadline(actionDeadlineUtc, 250);
-                    if (DismissDarkroomPropertyError(process.Id, window))
+                    Log("Checking native Darkroom error dialogs (no accessibility scan).");
+                    if (native.DismissCameraPropertyError())
                         throw new InvalidOperationException(
                             "Darkroom reported that ISO " +
                             target.Value + " could not be set.");
+                    native.RequireReady();
                     string confirmed = ReadComboSelection(combo);
                     if (!String.Equals(
                             confirmed, target.Value,
@@ -4048,46 +4050,6 @@ namespace Jvdp.LightDarkroomOverlay
                 throw new InvalidOperationException(
                     "Darkroom rejected native ISO dropdown keyboard input.");
         }
-        private bool DismissDarkroomPropertyError(
-            int processId, IntPtr mainWindow)
-        {
-            // Only inspect separate visible Darkroom dialogs. The old code
-            // walked the complete main-window accessibility tree ten times,
-            // which could add tens of seconds on a Surface.
-            foreach (IntPtr dialogWindow in
-                FindTopLevelProcessWindows(processId))
-            {
-                if (dialogWindow == mainWindow ||
-                    !IsWindowVisible(dialogWindow))
-                    continue;
-                try
-                {
-                    AutomationElement root =
-                        AutomationElement.FromHandle(dialogWindow);
-                    AutomationElement error = root.FindFirst(
-                        TreeScope.Element | TreeScope.Descendants,
-                        new PropertyCondition(
-                            AutomationElement.NameProperty,
-                            "The property could not be set.",
-                            PropertyConditionFlags.IgnoreCase));
-                    if (error == null)
-                        continue;
-
-                    PostMessage(
-                        dialogWindow, 0x0010,
-                        IntPtr.Zero, IntPtr.Zero);
-                    Log("Darkroom property-error dialog detected and closed.");
-                    return true;
-                }
-                catch (Exception exception)
-                {
-                    Log("Darkroom property-error dialog check failed: " +
-                        exception.Message);
-                }
-            }
-            return false;
-        }
-
         private void EnsureSerialConnected()
         {
             if (shuttingDown)
@@ -4378,6 +4340,16 @@ namespace Jvdp.LightDarkroomOverlay
         }
 
         private void RefreshUi()
+        {
+            // Timer messages, control layout and failed action starts can reenter
+            // the message loop. Never recursively render/start actions on the stack.
+            if (Interlocked.Exchange(ref uiRefreshActive, 1) != 0)
+                return;
+            try { RefreshUiCore(); }
+            finally { Interlocked.Exchange(ref uiRefreshActive, 0); }
+        }
+
+        private void RefreshUiCore()
         {
             int light;
             int targetIso;
@@ -7456,8 +7428,6 @@ namespace Jvdp.LightDarkroomOverlay
 
     internal static class Program
     {
-        private const int WmActivateExistingInstance = 0x8001;
-
         [DllImport("user32.dll")]
         private static extern bool SetProcessDpiAwarenessContext(
             IntPtr dpiContext);
@@ -7469,20 +7439,18 @@ namespace Jvdp.LightDarkroomOverlay
         [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        private static extern IntPtr FindWindow(
-            string className, string windowName);
-
-        [DllImport("user32.dll")]
-        private static extern bool PostMessage(
-            IntPtr handle, uint message, IntPtr wParam, IntPtr lParam);
-
         [STAThread]
         private static void Main(string[] args)
         {
             EnablePerMonitorDpiAwareness();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs error)
+            {
+                InstanceActivation.Log("Unhandled exception: " + Convert.ToString(error.ExceptionObject));
+            };
+            try { Jvdp.WindowsIntegration.StartMenuShortcut.EnsureForInstalledApp(Application.ExecutablePath); }
+            catch (Exception error) { InstanceActivation.Log("Start-menu repair failed: " + error.Message); }
             bool startInTray = Array.Exists(
                 args, delegate(string value)
                 {
@@ -7492,25 +7460,10 @@ namespace Jvdp.LightDarkroomOverlay
             using (Mutex instanceMutex = new Mutex(
                 false, @"Local\JvDPLichtregeling"))
             {
-                bool ownsInstance = false;
-                try
-                {
-                    ownsInstance = instanceMutex.WaitOne(0, false);
-                }
-                catch (AbandonedMutexException)
-                {
-                    ownsInstance = true;
-                }
+                bool ownsInstance = InstanceActivation.AcquireOrActivate(
+                    new NativeInstanceActivation(instanceMutex, Application.ExecutablePath), startInTray);
                 if (!ownsInstance)
-                {
-                    IntPtr existing = FindWindow(
-                        null, "JvdP Lichtregeling");
-                    if (existing != IntPtr.Zero)
-                        PostMessage(existing,
-                            WmActivateExistingInstance,
-                            IntPtr.Zero, IntPtr.Zero);
                     return;
-                }
                 try
                 {
                     Application.Run(new OverlayForm(startInTray));

@@ -26,6 +26,9 @@ jobs:
       - name: Verify Darkroom navigation without desktop input
         shell: pwsh
         run: ./test-darkroom-navigation.ps1
+      - name: Verify installer shortcut and crash restart handling
+        shell: pwsh
+        run: ./test-desktop-integration.ps1
       - name: Verify 10-size Windows layout matrix
         shell: pwsh
         run: ./test-layout-matrix.ps1 -SkipBuild

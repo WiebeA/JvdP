@@ -50,6 +50,9 @@ namespace Jvdp.LightDarkroomInstaller
 
             if (testMode)
             {
+                Jvdp.WindowsIntegration.StartMenuShortcut.Write(
+                    Path.Combine(installDirectory, "start-menu",
+                        Jvdp.WindowsIntegration.StartMenuShortcut.FileName), installedExe);
                 File.AppendAllText(
                     Path.Combine(installDirectory, "install-test.log"),
                     DateTime.Now.ToString("s") +
@@ -61,6 +64,8 @@ namespace Jvdp.LightDarkroomInstaller
                 installedUninstaller, true);
             DisableLegacyAgentStartup();
             RegisterAutomaticStartup(installedExe, installedUpdater);
+            Jvdp.WindowsIntegration.StartMenuShortcut.Write(
+                Jvdp.WindowsIntegration.StartMenuShortcut.MenuPath, installedExe);
             RegisterUninstaller(installDirectory, installedExe,
                 installedUpdater, installedUninstaller);
             StartComponents(installedExe, installedUpdater,
@@ -72,6 +77,8 @@ namespace Jvdp.LightDarkroomInstaller
                 ProductName + " is geinstalleerd en gestart.\r\n\r\n" +
                 "De lichtsensor-app en automatische updater starten voortaan " +
                 "wanneer deze Windows-gebruiker zich aanmeldt.\r\n\r\n" +
+                "Je kunt de software altijd opnieuw openen via Start: " +
+                "zoek op JvdP, Lichtregeling of Lichtsensor.\r\n\r\n" +
                 "Installatiemap:\r\n" + installDirectory,
                 MessageBoxIcon.Information, quiet);
             return 0;
@@ -96,6 +103,7 @@ namespace Jvdp.LightDarkroomInstaller
                 "JvdP", "LightDarkroomOverlay");
             StopRunningComponents();
             RemoveRegistryEntries();
+            Jvdp.WindowsIntegration.StartMenuShortcut.RemoveInstalledShortcut();
             DisableLegacyAgentStartup();
             if (Directory.Exists(installDirectory))
                 ScheduleDirectoryRemoval(installDirectory);

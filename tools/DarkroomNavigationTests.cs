@@ -359,6 +359,12 @@ internal static class DarkroomNavigationTests
             Check(!NativeDarkroomNavigation.IsSettingsMenuContent("menu", menuText.Replace("Camera", "CameraError")),
                 "Menu detection requires complete labels, not substrings");
             Check(!NativeDarkroomNavigation.IsSettingsMenuContent(null, null), "No content is not a menu");
+            Check(NativeDarkroomNavigation.IsCameraPropertyErrorText(" The property could not be set. "),
+                "Known property-error text recognized without accessibility providers");
+            Check(!NativeDarkroomNavigation.IsCameraPropertyErrorText("Start Booth Mode") &&
+                !NativeDarkroomNavigation.IsCameraPropertyErrorText("Delete event?") &&
+                !NativeDarkroomNavigation.IsCameraPropertyErrorText(null),
+                "Unknown dialogs are not dismissed as camera property errors");
             foreach (string label in new string[] { "Start Booth Mode", "Global Settings", "Camera",
                     "Output Queue", "Session History", "Event Info" })
                 Check(!NativeDarkroomNavigation.IsSettingsMenuContent("menu", menuText.Replace(label, "")),

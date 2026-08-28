@@ -421,6 +421,51 @@ namespace Jvdp.LightDarkroomOverlay
             return false;
         }
 
+        internal bool DismissCameraPropertyError()
+        {
+            RequireEditorIdentity();
+            Stopwatch timer = Stopwatch.StartNew();
+            foreach (IntPtr dialog in ProcessWindows(processId))
+            {
+                if (timer.ElapsedMilliseconds >= 350) break;
+                if (!IsOwnedDialog(dialog)) continue;
+                bool matched = false;
+                int controls = 0;
+                EnumProc callback = delegate(IntPtr child, IntPtr unused)
+                {
+                    int remaining = 350 - (int)timer.ElapsedMilliseconds;
+                    if (++controls > 64 || remaining <= 0) return false;
+                    StringBuilder value = new StringBuilder(512);
+                    IntPtr result;
+                    if (SendMessageTimeout(child, 0x000d, new IntPtr(value.Capacity),
+                            value, 0x0003, (uint)Math.Min(40, remaining), out result) != IntPtr.Zero &&
+                        IsCameraPropertyErrorText(value.ToString()))
+                    {
+                        matched = true;
+                        return false;
+                    }
+                    return true;
+                };
+                // Only bounded native HWND/text queries on this editor's modal
+                // dialogs. Do not load UIAutomationClient or enumerate provider
+                // trees: a provider's stack overflow cannot be caught in C#.
+                EnumChildWindows(dialog, callback, IntPtr.Zero);
+                GC.KeepAlive(callback);
+                if (matched && IsOwnedDialog(dialog))
+                {
+                    PostChecked(dialog, 0x0010, IntPtr.Zero, IntPtr.Zero);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        internal static bool IsCameraPropertyErrorText(string text)
+        {
+            return String.Equals((text ?? "").Trim(), "The property could not be set.",
+                StringComparison.OrdinalIgnoreCase);
+        }
+
         private bool IsOwnedDialog(IntPtr dialog)
         {
             uint ownerProcess;
@@ -741,5 +786,8 @@ namespace Jvdp.LightDarkroomOverlay
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr SendMessageTimeout(IntPtr window, uint message,
             IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr SendMessageTimeout(IntPtr window, uint message,
+            IntPtr wParam, StringBuilder text, uint flags, uint timeout, out IntPtr result);
     }
 }

@@ -7,9 +7,18 @@ the tray icon or choose `Openen` to show the normal Windows window. Minimizing
 or closing that window returns it to the tray. Choose `Afsluiten` in the tray menu to stop
 the application completely.
 
+Installation and updates create **JvdP Lichtregeling - Lichtsensor** in the current
+Windows user's Start menu. Search for `JvdP`, `Lichtregeling` or `Lichtsensor` to
+open the dashboard. The shortcut always targets the fixed installed executable,
+not a download or temporary update folder, and the installed app repairs it on
+launch if needed. Opening an already running copy shows its dashboard. If that
+copy does not respond, a manual launch offers to restart only that same installed
+copy, after confirmation; Darkroom is not terminated. Automatic sign-in launches
+do not show this prompt.
+
 ## Current build
 
-The current build version comes from the repository VERSION file. It controls Darkroom without coordinates, cursor movement, mouse clicks or full accessibility-tree scans.
+The current build version comes from the repository VERSION file. It controls Darkroom without coordinates, cursor movement, mouse clicks or UI Automation tree scans. The application no longer references UIAutomationClient or UIAutomationTypes.
 
 Automatic mode is the default. Once the PC-mapped target has remained unchanged for
 the configured stability period (60 seconds by default) and Darkroom Booth is
@@ -39,7 +48,8 @@ main window.
    and retains the same window handle for three observations.
 6. Finds the requested ISO with one exact native ComboBox lookup. The full list is
    read only when the connected camera does not offer that exact ISO.
-7. Confirms the selected ISO, checks only separate visible Darkroom error dialogs,
+7. Confirms the selected ISO, checks only native text in separate visible, owned
+   Darkroom error dialogs (bounded to 350 ms and 64 controls per dialog),
    then starts and visibly confirms Booth Mode again. An open Settings navigation
    menu is positively identified and cancelled first. Its HTML title and labels
    are read only for this purpose, with a bounded background reader; other dialogs
@@ -64,6 +74,11 @@ it. Preflight failure does not change the running booth.
 Run `./test-darkroom-navigation.ps1` from the repository root for the simulated
 navigation regression test. It sends no desktop or camera input and is also run
 by the release workflow. This is not a substitute for checking a real camera.
+
+Run `./test-desktop-integration.ps1` after building to exercise shortcut creation
+in an isolated installer directory and simulate instance activation/recovery. It
+does not modify the real Start menu, launch the installed app or terminate any
+process. The build is also checked for unwanted UI Automation dependencies.
 
 Detailed flow and logs: `DARKROOM-FLOW-AND-LOGGING.md`.
 ## ISO commit fix (v7)

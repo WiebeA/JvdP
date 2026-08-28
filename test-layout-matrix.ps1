@@ -27,21 +27,7 @@ $csc = @(
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $csc) { throw 'The .NET Framework C# compiler was not found.' }
 
-function Resolve-FrameworkAssembly([string]$name) {
-    $gacRoot = Join-Path $env:WINDIR 'Microsoft.NET\assembly\GAC_MSIL'
-    $assembly = Get-ChildItem -LiteralPath (Join-Path $gacRoot $name) `
-        -Recurse -File -Filter "$name.dll" -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending | Select-Object -First 1
-    if (-not $assembly) {
-        throw "Required framework assembly was not found: $name"
-    }
-    return $assembly.FullName
-}
-
 $runner = Join-Path $OutputDirectory 'LayoutMatrixRunner.exe'
-$uiAutomationClient = Resolve-FrameworkAssembly 'UIAutomationClient'
-$uiAutomationTypes = Resolve-FrameworkAssembly 'UIAutomationTypes'
-$windowsBase = Resolve-FrameworkAssembly 'WindowsBase'
 & $csc /nologo /target:exe /optimize+ /platform:anycpu `
     /main:Jvdp.LayoutTests.LayoutMatrixRunner `
     /out:$runner `
@@ -49,10 +35,9 @@ $windowsBase = Resolve-FrameworkAssembly 'WindowsBase'
     /reference:System.Core.dll `
     /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
-    /reference:$uiAutomationClient `
-    /reference:$uiAutomationTypes `
-    /reference:$windowsBase `
     (Join-Path $projectRoot '.generated\OverlayBuildInfo.cs') `
+    (Join-Path $projectRoot 'shared\StartMenuShortcut.cs') `
+    (Join-Path $projectRoot 'pc-overlay\InstanceActivation.cs') `
     (Join-Path $projectRoot 'pc-overlay\LightCheckCycle.cs') `
     (Join-Path $projectRoot 'pc-overlay\DarkroomNavigation.cs') `
     (Join-Path $projectRoot 'pc-overlay\LightDarkroomOverlay.cs') `
