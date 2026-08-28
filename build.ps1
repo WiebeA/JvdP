@@ -109,6 +109,7 @@ if (-not (Test-Path -LiteralPath $overlayConfigSource)) {
     /reference:$uiAutomationTypes `
     /reference:$windowsBase `
     $overlayBuildInfo `
+    (Join-Path $projectRoot 'pc-overlay\DarkroomNavigation.cs') `
     (Join-Path $projectRoot 'pc-overlay\LightDarkroomOverlay.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Overlay compilation failed.' }
 Copy-Item -LiteralPath $overlayConfigSource -Destination $overlayConfig -Force

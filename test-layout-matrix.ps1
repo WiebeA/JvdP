@@ -53,6 +53,7 @@ $windowsBase = Resolve-FrameworkAssembly 'WindowsBase'
     /reference:$uiAutomationTypes `
     /reference:$windowsBase `
     (Join-Path $projectRoot '.generated\OverlayBuildInfo.cs') `
+    (Join-Path $projectRoot 'pc-overlay\DarkroomNavigation.cs') `
     (Join-Path $projectRoot 'pc-overlay\LightDarkroomOverlay.cs') `
     (Join-Path $projectRoot 'tools\LayoutMatrixRunner.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Layout matrix runner compilation failed.' }

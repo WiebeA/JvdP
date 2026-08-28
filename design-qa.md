@@ -1,4 +1,9 @@
-# Design QA — JvdP Lichtregeling 24.5.12
+# Design QA — JvdP Lichtregeling
+
+Version 24.5.13 changes Darkroom navigation, not the layout. The visual evidence
+below is from the previous layout work; no new local desktop inspection was
+performed for 24.5.13. Navigation is covered by the separate simulated regression
+test, and the release workflow continues to run its existing layout matrix.
 
 ## Audit health
 

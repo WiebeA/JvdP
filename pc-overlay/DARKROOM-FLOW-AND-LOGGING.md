@@ -1,21 +1,45 @@
 # Darkroom flow and logging
 
-## Fast cached flow
+## Current flow — 24.5.13
 
-The current application performs the read-only `CXToolbar` validation immediately
-after leaving Booth Mode. Some Darkroom versions do not expose that control while
-Booth Mode is active, so automatic adjustment must never wait for a background
-preparation in that state. The validated toolbar and command target are then reused
-for the remaining lifetime of that Darkroom process.
+The fixed-vtable process-memory scan has been removed. The command destination is
+the unique native editor window owning the toolbar children, including hidden
+children in Booth Mode. Duplicate toolbar IDs within one editor are harmless. If
+those controls have been destroyed, a unique unowned, captioned Darkroom frame is
+accepted; multiple possible editors are rejected before navigation. The transient
+`Process.MainWindowHandle` is not used for actions.
 
-The action path uses native child-window enumeration before accessibility APIs,
-addresses Camera directly with command `33082`, finds an exact ISO with
-`CB_FINDSTRINGEXACT`, and checks only separate visible error dialogs after the
-selection. The former ten full accessibility-tree error scans are not part of the
-action anymore. Per-step durations are written as `Darkroom timing:` log records and
-the settings/change phase has a ten-second deadline.
+Static analysis of the installed Darkroom 3.01.1434 executable and XPhotoLib proves:
 
-## Current native flow
+- `CXFrame::OnCmdMsg` routes menu-style commands to its active page.
+- Command `545` (`0x221`) selects the Settings page directly.
+- Commands `660`–`662` are handled on that page; `660` opens a modal Settings picker,
+  while `662` advances the current settings page.
+- `33082` is a return value interpreted inside the modal picker, not a standalone
+  Camera command handler. Sending it as `WM_COMMAND` is not a direct Camera action.
+
+The implementation therefore sends `545`, then at most ten `662` commands until a
+stable, visible, enabled ISO control `107` appears. All commands use `lParam = 0`
+and are addressed to the validated editor. No toolbar pointer, guessed coordinates,
+global Escape key, C++ vtable address or process-memory scan is needed.
+
+Booth Mode is confirmed through a visible, non-tool, borderless Darkroom surface on
+its display, rather than the editor's minimized state or maximized bounds. Escape
+is posted only to the identified Booth window. Starting Booth Mode sends `33776`
+once to the editor and waits up to five seconds for a visible Booth surface. On
+failure, recovery happens only when this action had left an existing Booth Mode.
+
+`tools/DarkroomNavigationTests.cs` covers page navigation from all eleven starting
+pages, duplicate/ambiguous editor roots, failed preflight, failed exit/start,
+missing or unstable ISO controls, deadlines and borderless-versus-captioned
+windows. Tests use an in-memory fake and never touch the user's desktop or camera.
+The real camera/booth is not exercised by these tests.
+
+Microsoft's [command-routing documentation](https://learn.microsoft.com/en-us/cpp/mfc/tn021-command-and-message-routing?view=msvc-170)
+describes the menu-style command mechanism used here. Darkroom's internal command
+IDs are established by local executable analysis, not guaranteed by that document.
+
+## Historical native flow (superseded)
 
 Darkroom is never controlled with screen coordinates, synthesized mouse input, sampled pixels or screenshot-relative positions.
 

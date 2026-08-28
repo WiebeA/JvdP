@@ -27,13 +27,16 @@ Serial discovery and the periodic Darkroom control probe run outside the UI thre
 Opening a slow COM port or waiting for a Darkroom native control cannot freeze the
 main window.
 
-1. Leaves Booth Mode with Escape only after the configured stability period.
-2. Identifies Darkroom's one real `CXToolbar` after that transition and caches
-   the validated handles for all later changes in the same Darkroom process.
-3. Sends Settings command `660` exactly once through the prepared command target.
-4. Sends the native Camera command `33082` directly. The bounded native page
-   navigation remains available only as a recovery route.
-5. Stops as soon as visible native ISO ComboBox control `107` appears.
+1. Identifies the unique Darkroom editor from its native window tree before
+   changing anything. Temporary Booth windows are not used as command targets.
+2. If Booth Mode is visible, sends Escape to that specific Darkroom window's
+   message queue. No global keyboard input or foreground-window change is used.
+3. Opens the Settings **page** with menu-style command `545`, bypassing the
+   Settings picker and its private toolbar objects entirely.
+4. Advances through at most ten native settings pages with command `662`.
+   `33082` is a Settings picker return value, not a Camera command handler.
+5. Stops when enabled, visible ISO ComboBox `107` supports native ComboBox queries
+   and retains the same window handle for three observations.
 6. Finds the requested ISO with one exact native ComboBox lookup. The full list is
    read only when the connected camera does not offer that exact ISO.
 7. Confirms the selected ISO, checks only separate visible Darkroom error dialogs,
@@ -41,10 +44,16 @@ main window.
 
 The v5 accessibility/MSAA Camera search was removed after the test showed that Darkroom had already opened the native `Photos` settings page and the overlay then terminated during accessibility enumeration. Camera no longer needs to be found as a tile or label.
 
-The normal action no longer traverses Darkroom's full UI Automation tree. Each step
-is timed in the log and the settings/change path has a ten-second deadline. The
-toolbar is deliberately not required while Booth Mode is still active because some
-Darkroom versions expose it only after Booth Mode has been left.
+The normal action does not traverse Darkroom's full UI Automation tree or read its
+process memory. Each step is timed and settings/ISO navigation has a ten-second
+deadline. Starting Booth Mode has a separate five-second confirmation window.
+A minimized or maximized editor alone is never confirmation of Booth Mode. On
+failure, recovery is attempted only if this action started in Booth Mode and left
+it. Preflight failure does not change the running booth.
+
+Run `./test-darkroom-navigation.ps1` from the repository root for the simulated
+navigation regression test. It sends no desktop or camera input and is also run
+by the release workflow. This is not a substitute for checking a real camera.
 
 Detailed flow and logs: `DARKROOM-FLOW-AND-LOGGING.md`.
 ## ISO commit fix (v7)
