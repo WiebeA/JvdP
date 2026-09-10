@@ -1400,11 +1400,15 @@ namespace Jvdp.LightDarkroomOverlay
                 StringComparison.OrdinalIgnoreCase))
                 SetUpdateButtonState(
                     "Installeren " + available, Accent, false, message);
-            else if (String.Equals(state, "ready", StringComparison.OrdinalIgnoreCase) ||
-                String.Equals(state, "blocked", StringComparison.OrdinalIgnoreCase))
+            else if (String.Equals(state, "ready", StringComparison.OrdinalIgnoreCase))
             {
                 updateStatusTimer.Stop(); updateCheckStartedAtUtc = DateTime.MinValue;
-                SetUpdateButtonState("Update wacht op onderhoud", Color.FromArgb(137, 87, 0), true, message);
+                SetUpdateButtonState("Update installeren", Accent, true, message);
+            }
+            else if (String.Equals(state, "blocked", StringComparison.OrdinalIgnoreCase))
+            {
+                updateStatusTimer.Stop(); updateCheckStartedAtUtc = DateTime.MinValue;
+                SetUpdateButtonState("Opnieuw controleren", Color.FromArgb(137, 87, 0), true, message);
             }
             else if (String.Equals(state, "current",
                 StringComparison.OrdinalIgnoreCase))

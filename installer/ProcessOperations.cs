@@ -13,14 +13,6 @@ namespace Jvdp.LightDarkroomInstaller
         [DllImport("user32.dll")]
         private static extern bool IsWindowVisible(IntPtr windowHandle);
 
-        [DllImport("user32.dll")]
-        private static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
-        [DllImport("user32.dll")]
-        private static extern bool EnumWindows(EnumWindowCallback callback, IntPtr argument);
-        private delegate bool EnumWindowCallback(IntPtr window, IntPtr argument);
-        [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
-
         private static void RequireDarkroomClosed()
         {
             int session = Process.GetCurrentProcess().SessionId;
@@ -52,14 +44,7 @@ namespace Jvdp.LightDarkroomInstaller
                 {
                     process.Kill(); process.WaitForExit(5000); continue;
                 }
-                EnumWindows(delegate(IntPtr window, IntPtr unused)
-                {
-                    uint id; GetWindowThreadProcessId(window, out id);
-                    if (id == process.Id) PostMessage(window, BoothCoordination.ShutdownForUpdate, IntPtr.Zero, IntPtr.Zero);
-                    return true;
-                }, IntPtr.Zero);
-                if (!process.WaitForExit(7000))
-                    throw new InvalidOperationException("De lichtregeling kon niet gecontroleerd sluiten. Sluit de app via Afsluiten of start Onderhoud en probeer opnieuw.");
+                OverlayShutdown.Stop(process, root, session, RequireDarkroomClosed);
             }
         }
 

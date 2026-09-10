@@ -146,15 +146,18 @@ three consecutive action failures block further automatic attempts.
 The updater downloads and verifies releases in the background. To install:
 
 1. Finish the event and close Darkroom.
-2. Open **Kalibratie en diagnose** and choose **Onderhoud starten**.
-3. The updater rechecks the release and the installer closes the light app gracefully.
+2. Click **Updates controleren** or **Update installeren** in the profile settings.
+3. The updater checks the release and the installer closes the light app automatically,
+   including when upgrading a running 24.5.16 or 24.6.0 installation.
 4. The previous version is retained until the new app confirms a healthy start.
 5. A failed update restores the previous version and blocks that failed release.
 
+Unattended installation still requires **Onderhoud starten** in **Kalibratie en diagnose**.
 Maintenance authorization expires after one hour. **Onderhoud stoppen** resumes
-normal operation. A normal update check does not grant maintenance authorization.
-For the first upgrade from an older version without graceful shutdown support,
-close the light app through **Afsluiten** before running the installer.
+normal operation. Clicking the update button authorizes that manual installation
+without a separate maintenance step; Darkroom must still be closed.
+The 24.6.0 updater itself still requires maintenance before launching an installer;
+users already on that version can start maintenance once or run the 24.6.1 installer directly.
 
 Profiles are saved atomically in `booth-profile.json`; existing local settings are
 imported on first launch. Custom profiles survive updates. Firmware is still a

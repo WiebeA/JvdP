@@ -32,6 +32,9 @@ jobs:
       - name: Verify regulation, session gating and update rollback
         shell: pwsh
         run: ./test-reliability.ps1
+      - name: Verify upgrades from running older apps
+        shell: pwsh
+        run: ./test-update-shutdown.ps1
       - name: Verify 10-size Windows layout matrix
         shell: pwsh
         run: ./test-layout-matrix.ps1 -SkipBuild

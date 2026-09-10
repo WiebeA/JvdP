@@ -54,6 +54,7 @@ namespace Jvdp.LightDarkroomInstaller
                     RequireDarkroomClosed();
                     StopForUpdate(installDirectory);
                 }
+                if (!testMode) RequireDarkroomClosed();
                 UpdateTransaction transaction = new UpdateTransaction(installDirectory);
                 if (transaction.Pending) transaction.Rollback();
                 transaction.Begin(new[] { InstalledExeName, UpdaterExeName, InstalledConfigName, "JvdpSessionSignal.exe",
@@ -307,17 +308,18 @@ namespace Jvdp.LightDarkroomInstaller
                         Environment.SpecialFolder.LocalApplicationData),
                     "JvdP", "LightDarkroomOverlay");
                 Directory.CreateDirectory(installDirectory);
+                string installedExe = Path.Combine(installDirectory, InstalledExeName);
+                string installedVersion = File.Exists(installedExe)
+                    ? FileVersionInfo.GetVersionInfo(installedExe).ProductVersion : "";
                 string status =
                     "State=" + state + Environment.NewLine +
                     "Checked=" + DateTime.UtcNow.ToString("o") +
                     Environment.NewLine +
-                    "InstalledVersion=" + Version + Environment.NewLine +
+                    "InstalledVersion=" + installedVersion + Environment.NewLine +
                     "AvailableVersion=v" + Version + Environment.NewLine +
                     "Message=" + (message ?? "").Replace("\r", " ")
                         .Replace("\n", " ") + Environment.NewLine;
-                File.WriteAllText(
-                    Path.Combine(installDirectory, "updater-status.txt"),
-                    status, new UTF8Encoding(false));
+                ReliableFiles.Write(Path.Combine(installDirectory, "updater-status.txt"), status);
             }
             catch { }
         }
@@ -334,10 +336,16 @@ namespace Jvdp.LightDarkroomInstaller
                     installDirectory, InstalledExeName);
                 if (!File.Exists(installedExe))
                     return;
+                foreach (Process process in Process.GetProcessesByName("JvdpLightDarkroomOverlay"))
+                    using (process)
+                        if (process.SessionId == Process.GetCurrentProcess().SessionId &&
+                            String.Equals(process.MainModule.FileName, installedExe, StringComparison.OrdinalIgnoreCase)) return;
                 Process.Start(new ProcessStartInfo {
                     FileName = installedExe,
+                    Arguments = "--startup",
                     WorkingDirectory = installDirectory,
-                    UseShellExecute = true
+                    UseShellExecute = false,
+                    CreateNoWindow = true
                 });
             }
             catch { }

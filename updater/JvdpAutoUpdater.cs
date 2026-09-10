@@ -335,9 +335,10 @@ namespace Jvdp.AutoUpdater
             Directory.CreateDirectory(cache);
             string temporaryInstaller = Path.Combine(cache, "JvdP-Light-Update-" + release.tag_name + ".exe");
             File.WriteAllBytes(temporaryInstaller, installerBytes);
-            if (!BoothCoordination.HasMaintenance(LocalRoot, DateTime.UtcNow) || DarkroomInCurrentSession())
+            if (!BoothCoordination.CanInstall(showAfterUpdate,
+                BoothCoordination.HasMaintenance(LocalRoot, DateTime.UtcNow), BoothCoordination.DarkroomInCurrentSession()))
             {
-                WriteStatus("ready", release.tag_name, "Update gedownload en gecontroleerd. Sluit Darkroom na het evenement en start Onderhoud via Kalibratie en diagnose.");
+                WriteStatus("ready", release.tag_name, "Update klaar. Sluit Darkroom na het evenement en klik op Update installeren.");
                 return false;
             }
             ReliableFiles.Write(PendingReleaseTagPath, release.tag_name);
@@ -346,7 +347,7 @@ namespace Jvdp.AutoUpdater
             Log("Installing release " + release.tag_name +
                 " from channel " + channel + ".");
 
-            Process.Start(new ProcessStartInfo {
+            using (Process installation = Process.Start(new ProcessStartInfo {
                 FileName = temporaryInstaller,
                 Arguments = showAfterUpdate
                     ? "--quiet --coordinated-update --show-after-update"
@@ -354,16 +355,14 @@ namespace Jvdp.AutoUpdater
                 UseShellExecute = true,
                 WorkingDirectory = cache,
                 WindowStyle = ProcessWindowStyle.Hidden
-            });
-            return true;
-        }
-
-        private static bool DarkroomInCurrentSession()
-        {
-            int session = Process.GetCurrentProcess().SessionId;
-            foreach (Process process in Process.GetProcessesByName("DarkroomBooth"))
-                using (process) { if (process.SessionId == session) return true; }
-            return false;
+            }))
+            {
+                // Successful replacement stops this updater. If the installer
+                // refuses before replacement, keep servicing checks and retries.
+                if (installation == null) throw new InvalidOperationException("De installer kon niet worden gestart.");
+                installation.WaitForExit();
+                return installation.ExitCode == 0;
+            }
         }
 
         private static GitHubRelease GetRelease(string channel)

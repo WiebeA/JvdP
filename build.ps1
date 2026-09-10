@@ -138,6 +138,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
     (Join-Path $projectRoot 'installer\InstallerProgram.cs') `
     (Join-Path $projectRoot 'installer\InstallOperations.cs') `
     (Join-Path $projectRoot 'installer\RegistryOperations.cs') `
+    (Join-Path $projectRoot 'installer\OverlayShutdown.cs') `
     (Join-Path $projectRoot 'installer\ProcessOperations.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
 

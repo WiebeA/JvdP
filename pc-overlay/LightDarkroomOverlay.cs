@@ -1811,7 +1811,7 @@ namespace Jvdp.LightDarkroomOverlay
         {
             if (message.Msg == BoothCoordination.ShutdownForUpdate)
             {
-                if (!manualActionRunning && maintenanceMode) ExitApplication();
+                if (!manualActionRunning && !BoothCoordination.DarkroomInCurrentSession()) ExitApplication();
                 return;
             }
             if (message.Msg == 0x0219) ResetSerialBackoff();

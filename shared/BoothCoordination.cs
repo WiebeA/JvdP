@@ -63,5 +63,18 @@ namespace Jvdp.Reliability
             }
             catch { return false; }
         }
+
+        internal static bool CanInstall(bool manualRequest, bool maintenance, bool darkroomRunning)
+        {
+            return !darkroomRunning && (manualRequest || maintenance);
+        }
+
+        internal static bool DarkroomInCurrentSession()
+        {
+            int session = Process.GetCurrentProcess().SessionId;
+            foreach (Process process in Process.GetProcessesByName("DarkroomBooth"))
+                using (process) { if (process.SessionId == session) return true; }
+            return false;
+        }
     }
 }

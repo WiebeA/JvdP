@@ -149,6 +149,21 @@ internal static class ReliabilityTests
         Reject(delegate { transaction.Begin(new[] { "../escape" }); }, "Rollback paths confined to install root");
         Check(OverlayForm.IsVerifiedDarkroom("3.01.1434.0") && !OverlayForm.IsVerifiedDarkroom("3.1.9999"), "Explicit Darkroom compatibility");
         Application.EnableVisualStyles();
+        using (IsoMappingForm updates = new IsoMappingForm(false, bands, bands, new[] { 2500, 3200 },
+            "Update test", 60, false, "", "", "Test", "Test"))
+        {
+            MethodInfo applyStatus = typeof(IsoMappingForm).GetMethod("ApplyUpdateStatusValues", BindingFlags.Instance | BindingFlags.NonPublic);
+            Button updateButton = (Button)typeof(IsoMappingForm).GetField("updateButton", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(updates);
+            Dictionary<string, string> status = new Dictionary<string, string> {
+                { "State", "ready" }, { "AvailableVersion", "v24.6.1" }, { "Message", "Sluit Darkroom en installeer de update." } };
+            applyStatus.Invoke(updates, new object[] { status, now, now });
+            Check(updateButton.Enabled && updateButton.Text == "Update installeren", "Downloaded update offers an enabled installation button");
+            Check(updateButton.AccessibleDescription == status["Message"], "Installation button exposes the next step");
+            status["State"] = "blocked"; status["Message"] = "Deze release is geblokkeerd na een mislukte installatie.";
+            applyStatus.Invoke(updates, new object[] { status, now, now });
+            Check(updateButton.Enabled && updateButton.Text == "Opnieuw controleren" && updateButton.AccessibleDescription == status["Message"],
+                "Blocked release offers recheck with the actual reason, not a maintenance instruction");
+        }
         List<LightHistoryPoint> graphData = new List<LightHistoryPoint>();
         for (int i = 0; i < 120; i++) graphData.Add(new LightHistoryPoint { At = now.AddSeconds(i), Light = 40 + i / 4,
             Target = 1600, Confirmed = "1600", Note = i == 60 ? "ISO bevestigd: 1600" : "" });
