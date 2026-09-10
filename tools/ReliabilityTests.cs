@@ -90,6 +90,11 @@ internal static class ReliabilityTests
         string profile = Path.Combine(root, "profile.json"); settings.Save(profile);
         Check(BoothSettings.Parse(File.ReadAllText(profile)).Name == "Booth café", "Profile JSON round-trip with accents");
         string original = File.ReadAllText(profile);
+        string legacyProfile = original.Replace(",\"RequireSessionSignals\":false", "");
+        Check(!legacyProfile.Contains("RequireSessionSignals") && !BoothSettings.Parse(legacyProfile).RequireSessionSignals,
+            "Existing profiles restore normal automatic regulation without new configuration");
+        BoothSettings linkedProfile = BoothSettings.Parse(original); linkedProfile.RequireSessionSignals = true;
+        Check(BoothSettings.Parse(linkedProfile.Serialize()).RequireSessionSignals, "Explicit session integration survives profile export/import");
         settings.BrightRaw = settings.DarkRaw;
         Reject(delegate { settings.Save(profile); }, "Invalid calibration rejected before writing");
         Check(File.ReadAllText(profile) == original, "Failed save preserves previous profile");
@@ -109,14 +114,36 @@ internal static class ReliabilityTests
         Set(overlay, "localDirectory", root); Set(overlay, "darkroomIdentity", identity);
         Set(overlay, "darkroomRunning", true); Set(overlay, "darkroomVersion", "3.01.1434.0");
         Set(overlay, "lastSensorTick", Stopwatch.GetTimestamp());
-        Set(overlay, "boothSettings", BoothSettings.Parse(original));
+        BoothSettings activeSettings = BoothSettings.Parse(original);
+        Set(overlay, "boothSettings", activeSettings);
         MethodInfo gate = typeof(OverlayForm).GetMethod("GetActionBlockReason", BindingFlags.Instance | BindingFlags.NonPublic);
         Check(gate.Invoke(overlay, new object[] { true }) != null, "Busy session blocks even initial preparation");
+        File.Delete(Path.Combine(root, "session-state.txt"));
+        Set(overlay, "boothMode", true); Set(overlay, "initialPreparationDone", true);
+        foreach (string version in new[] { "2.01.1354", "2.01.1354.0", "3.01.1434.0", "3.1.9999", "" })
+        {
+            Set(overlay, "darkroomVersion", version);
+            Check(gate.Invoke(overlay, new object[] { true }) == null, "Automatic regulation without idle signal for Darkroom " + version);
+            Check(gate.Invoke(overlay, new object[] { false }) == null, "Manual regulation without idle signal for Darkroom " + version);
+        }
+        Set(overlay, "darkroomVersion", "2.01.1354");
+        MethodInfo compatibility = typeof(OverlayForm).GetMethod("GetCompatibilityStatus", BindingFlags.Instance | BindingFlags.NonPublic);
+        Check(((string)compatibility.Invoke(overlay, null)).Contains("praktijktest nog niet vastgelegd"), "Unknown version is not falsely marked tested");
+        activeSettings.RequireSessionSignals = true;
+        Check(gate.Invoke(overlay, new object[] { true }) != null, "Explicit session integration blocks missing idle");
+        Check(gate.Invoke(overlay, new object[] { false }) != null, "Explicit session integration also guards manual actions");
         ReliableFiles.Write(Path.Combine(root, "session-state.txt"), identity + "\nidle\n" + DateTime.UtcNow.ToString("o"));
         Set(overlay, "boothMode", true);
         Check(gate.Invoke(overlay, new object[] { true }) == null, "Fresh idle permits a prepared action");
         ReliableFiles.Write(Path.Combine(root, "session-state.txt"), identity + "\nidle\n" + DateTime.UtcNow.AddMinutes(-1).ToString("o"));
         Check(gate.Invoke(overlay, new object[] { true }) != null, "Real action gate rejects stale idle in Booth Mode");
+        activeSettings.RequireSessionSignals = false;
+        Check(gate.Invoke(overlay, new object[] { true }) == null, "Normal regulation does not require renewing an expired idle signal");
+        ReliableFiles.Write(Path.Combine(root, "session-state.txt"), identity + "\nbusy\n" + DateTime.UtcNow.ToString("o"));
+        Check(gate.Invoke(overlay, new object[] { true }) != null, "An explicit busy signal still blocks in normal mode");
+        ReliableFiles.Write(Path.Combine(root, "session-state.txt"), identity + "\nidle\n" + DateTime.UtcNow.AddMinutes(-1).ToString("o"));
+        activeSettings.RequireSessionSignals = true;
+        Set(overlay, "initialPreparationDone", false);
         Set(overlay, "boothMode", false);
         Check(gate.Invoke(overlay, new object[] { true }) == null, "Initial preparation outside Booth Mode remains possible");
         Set(overlay, "maintenanceMode", true);
@@ -180,6 +207,13 @@ internal static class ReliabilityTests
             Check(!IsWindowVisible(handle), "New settings rendering does not show a desktop window");
             ComboBox limitInput = (ComboBox)typeof(ReliabilityForm).GetField("maximum", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
             Check(Convert.ToInt32(limitInput.SelectedItem) == 25600, "Maximum ISO is loaded into the actual selector");
+            CheckBox sessionInput = (CheckBox)typeof(ReliabilityForm).GetField("requireSessionSignals", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+            Check(!sessionInput.Checked, "Session integration is visibly optional by default");
+            sessionInput.Checked = true;
+            typeof(ReliabilityForm).GetMethod("CaptureDraft", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(form, null);
+            BoothSettings draft = (BoothSettings)typeof(ReliabilityForm).GetField("draft", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+            Check(draft.RequireSessionSignals, "Settings checkbox records the explicit choice");
+            sessionInput.Checked = false;
             using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
             {
                 form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));

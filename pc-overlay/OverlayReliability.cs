@@ -114,14 +114,24 @@ namespace Jvdp.LightDarkroomOverlay
             if (automatic && automaticFault != null) return automaticFault;
             if (!SensorIsFresh()) return "Wachten op verse sensormetingen.";
             if (!darkroomRunning) return "Start Darkroom om de camera voor te bereiden.";
-            if (automatic && !(boothSettings.AllowUntestedDarkroom &&
-                !String.IsNullOrWhiteSpace(darkroomVersion) && boothSettings.TestedDarkroomVersion == darkroomVersion) && !IsVerifiedDarkroom(darkroomVersion))
-                return "Darkroom " + darkroomVersion + " is nog niet gevalideerd. Controleer Compatibiliteit bij Kalibratie en diagnose.";
             string session = BoothCoordination.ReadSession(localDirectory, darkroomIdentity, DateTime.UtcNow);
             if (session == "busy") return "Fotosessie bezig; de ISO-aanpassing wacht.";
+            // Upgrading an existing booth must preserve its automatic regulation.
+            // Requiring events is an explicit choice after configuring Darkroom.
+            if (!boothSettings.RequireSessionSignals) return null;
             if (!initialPreparationDone && !boothMode) return null;
             if (session != "idle") return "Wachten op een bevestigd rustmoment. Controleer de sessiekoppeling.";
             return null;
+        }
+
+        private string GetCompatibilityStatus()
+        {
+            if (String.IsNullOrWhiteSpace(darkroomVersion)) return "Darkroom-versie nog niet beschikbaar.";
+            if (boothSettings.AllowUntestedDarkroom && boothSettings.TestedDarkroomVersion == darkroomVersion)
+                return "Darkroom " + darkroomVersion + ": praktijktest bevestigd voor deze booth.";
+            if (IsVerifiedDarkroom(darkroomVersion))
+                return "Darkroom " + darkroomVersion + ": opgenomen in de navigatiecontrole.";
+            return "Darkroom " + darkroomVersion + ": praktijktest nog niet vastgelegd. Dit blokkeert de regeling niet; de app controleert de bediening bij elke ISO-actie.";
         }
         internal static bool IsVerifiedDarkroom(string version)
         {
@@ -200,6 +210,8 @@ namespace Jvdp.LightDarkroomOverlay
                 "\nPort=" + activeSerialPort + "\nLastMeasurement=" + lastJvdpLineAt.ToString("o") +
                 "\nConfirmedISO=" + currentDarkroomIso + "\nISOChecked=" + currentIsoReadAt.ToString("o") +
                 "\nSession=" + BoothCoordination.ReadSession(localDirectory, darkroomIdentity, DateTime.UtcNow) +
+                "\nRequireSessionSignals=" + boothSettings.RequireSessionSignals +
+                "\nCompatibility=" + GetCompatibilityStatus() +
                 "\nFault=" + automaticFault);
             foreach (string name in new[] { "overlay.log", "overlay.log.1", "updater.log", "updater-status.txt", "startup.log", "installation.txt" })
                 if (File.Exists(Path.Combine(localDirectory, name))) File.Copy(Path.Combine(localDirectory, name), Path.Combine(folder, name));
@@ -217,7 +229,9 @@ namespace Jvdp.LightDarkroomOverlay
                 delegate { lock (sensor.Sync) return lastRawReading == null ? -1 : lastRawReading.Raw; },
                 delegate { return "Sensor " + sensorId + " · firmware " + sensorFirmware + " · Darkroom " + darkroomVersion +
                     "\r\nDoel " + sensor.MappedIso + " · bevestigd " + currentDarkroomIso + " om " + currentIsoReadAt.ToString("HH:mm:ss") +
-                    "\r\n" + (GetActionBlockReason(true) ?? "Gereed om aan te passen"); }))
+                    "\r\n" + (GetActionBlockReason(true) ?? "Gereed om aan te passen") +
+                    "\r\n" + (boothSettings.RequireSessionSignals ? "Sessiekoppeling verplicht; rustsignaal maximaal 30 seconden geldig." : "Normale automatische regeling; rustsignaal niet verplicht.") +
+                    "\r\n" + GetCompatibilityStatus(); }))
             {
                 form.SaveSettings = delegate(BoothSettings settings)
                 {

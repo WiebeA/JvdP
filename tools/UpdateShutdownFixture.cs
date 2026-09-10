@@ -39,7 +39,9 @@ internal static class UpdateShutdownFixture
         using (HiddenOverlay form = new HiddenOverlay())
         {
             IntPtr handle = form.Handle;
-            File.WriteAllText(Path.Combine(args[0], "ready.txt"), handle.ToInt64().ToString());
+            string ready = Path.Combine(args[0], "ready.txt");
+            File.WriteAllText(ready + ".new", handle.ToInt64().ToString());
+            File.Move(ready + ".new", ready);
             Application.Run(form);
         }
         File.WriteAllText(Path.Combine(args[0], "normal-exit.txt"), "Message loop returned normally.");

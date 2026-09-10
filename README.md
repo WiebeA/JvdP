@@ -125,15 +125,22 @@ Serial-port discovery and Darkroom status inspection run on background threads.
 Slow COM ports or an unresponsive Darkroom control therefore no longer block the
 Windows message loop or make the application show `Not responding`.
 
-## Reliability, calibration and sessions (24.6.0)
+## Reliability, calibration and sessions (24.6.2)
 
 See [implementation notes](docs/IMPLEMENTATIE-24.6.0.md) and
+[24.6.2 behavior changes](docs/RELEASE-24.6.2.md), plus
 [Darkroom session setup](docs/SESSION-INTEGRATION.md).
 
-In Booth Mode, automatic and manual ISO actions require a fresh idle signal.
-Unknown or stale session state blocks navigation. Initial preparation outside
-Booth Mode remains automatic. Unknown Darkroom versions require an explicit
-operator compatibility confirmation for that exact version after testing.
+Normal automatic regulation works without session signals, including when upgrading
+an existing booth profile. To require an idle signal, explicitly enable
+**Wachten op een Darkroom-rustsignaal** after configuring and testing the integration.
+With that option enabled, unknown or stale session state blocks actions in Booth Mode;
+initial preparation outside Booth Mode remains possible. A reported busy session
+always blocks actions. Without the integration, the app cannot infer guest-session
+boundaries and uses the existing cover and native navigation flow.
+Unknown Darkroom versions are informational, not a version-based lockout. The app
+still checks the actual native controls and confirms the ISO on every action.
+The compatibility checkbox records an operator's practical test for that version.
 
 Open **Verbindingen en technische details → Kalibratie en diagnose** for
 calibration, boundary margins, ISO limits, booth/camera names, profile import/export,

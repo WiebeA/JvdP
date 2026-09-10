@@ -17,6 +17,7 @@ namespace Jvdp.LightDarkroomOverlay
         private readonly NumericUpDown dark = Number(0, 4095), bright = Number(0, 4095), margin = Number(0, 10);
         private readonly ComboBox maximum = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
         private readonly CheckBox compatible = new CheckBox { Text = "Deze Darkroom-versie is op deze booth getest", AutoSize = true };
+        private readonly CheckBox requireSessionSignals = new CheckBox { Text = "Wachten op een Darkroom-rustsignaal", AutoSize = true };
         private readonly Timer timer = new Timer { Interval = 1000 };
         private readonly Label status = new Label { AutoSize = true, Dock = DockStyle.Fill };
         private readonly HistoryGraph graph;
@@ -46,9 +47,11 @@ namespace Jvdp.LightDarkroomOverlay
             maximum.Items.AddRange(Array.ConvertAll(OverlayForm.SupportedIsoValues, delegate(int value) { return (object)value; }));
             AddRow(page, "Maximale ISO", maximum);
             AddRow(page, "Compatibiliteit", compatible);
+            AddRow(page, "Extra sessiekoppeling", requireSessionSignals);
             Label explanation = new Label { AutoSize = true, MaximumSize = new Size(440, 0), Text =
                 "De marge voorkomt wisselen bij grensruis. Controleer de belichting met testfoto's. " +
-                "Automatisch aanpassen in Booth Mode vraagt een vers rustsignaal. Koppel JvdpSessionSignal.exe via Darkroom Device Control; zie de meegeleverde instructies." };
+                "De regeling werkt standaard zonder rustsignaal. Schakel de extra sessiekoppeling alleen in nadat die in Darkroom is ingesteld en getest. " +
+                "Een rustsignaal geldt 30 seconden; de ingestelde stabiliteitstijd moet ook verstreken zijn. Compatibiliteit legt een praktijktest vast en blokkeert de regeling niet." };
             AddRow(page, "Werking", explanation);
             AddRow(page, "Verbinding en ISO", status);
             graph = new HistoryGraph(history) { Dock = DockStyle.Fill, Height = 155, MinimumSize = new Size(1, 155) };
@@ -99,6 +102,7 @@ namespace Jvdp.LightDarkroomOverlay
         {
             name.Text = draft.Name; camera.Text = draft.Camera; dark.Value = draft.DarkRaw; bright.Value = draft.BrightRaw;
             margin.Value = draft.Margin; maximum.SelectedItem = draft.MaximumIso; compatible.Checked = draft.AllowUntestedDarkroom;
+            requireSessionSignals.Checked = draft.RequireSessionSignals;
         }
         protected override void Dispose(bool disposing)
         {
@@ -109,7 +113,8 @@ namespace Jvdp.LightDarkroomOverlay
         {
             draft.Name = name.Text.Trim(); draft.Camera = camera.Text.Trim(); draft.DarkRaw = (int)dark.Value;
             draft.BrightRaw = (int)bright.Value; draft.Margin = (int)margin.Value;
-            draft.MaximumIso = Convert.ToInt32(maximum.SelectedItem); draft.AllowUntestedDarkroom = compatible.Checked; draft.Validate();
+            draft.MaximumIso = Convert.ToInt32(maximum.SelectedItem); draft.AllowUntestedDarkroom = compatible.Checked;
+            draft.RequireSessionSignals = requireSessionSignals.Checked; draft.Validate();
         }
         private static NumericUpDown Number(int min, int max) { return new NumericUpDown { Minimum = min, Maximum = max, Height = 36 }; }
         private static void AddRow(TableLayoutPanel page, string text, Control input)

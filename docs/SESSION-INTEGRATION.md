@@ -1,5 +1,9 @@
 # Darkroom sessiesignalen
 
+Vanaf **24.6.2** is deze koppeling optioneel. De standaardregeling werkt zoals vóór 24.6.0 zonder verplicht rustsignaal. Zonder koppeling kent de app de gastensessiegrenzen niet en gebruikt hij de bestaande afdekking en native Darkroom-bediening. Een ontvangen `busy`-signaal wordt altijd gerespecteerd.
+
+Schakel **Kalibratie en diagnose → Extra sessiekoppeling → Wachten op een Darkroom-rustsignaal** alleen in als de events hieronder zijn ingesteld en getest. Sla daarna het profiel op. Bestaande profielen krijgen deze optie standaard uitgeschakeld.
+
 Darkroom kan via Device Control op sessiefases een extern programma aanroepen. De leverancier beschrijft die mogelijkheid in [Device Control](https://support.darkroomsoftware.com/portal/en/kb/articles/device-control-phidget). De beschikbare fases en de afhandeling van externe programma's moeten op de gebruikte Darkroom-build worden gecontroleerd.
 
 ## Instellen op een booth
@@ -13,6 +17,8 @@ Programma: `%LOCALAPPDATA%\JvdP\LightDarkroomOverlay\JvdpSessionSignal.exe`.
 | Na annuleren, pas wanneer het startscherm weer beschikbaar is | `idle` | Herstel na een afgebroken sessie |
 
 Geef `idle` niet na iedere foto, tussentijds aftellen of terwijl gasten nog hun keuze/aflevering afhandelen. Ook video-, survey- en alternatieve flows moeten de volledige gastensessie afdekken. Als de gebruikte build geen geschikt annuleren-/eindmoment beschikbaar heeft, houd automatisch aanpassen in Booth Mode geblokkeerd en gebruik een gecontroleerd handmatig rustmoment.
+
+Een rustsignaal is geen opdracht om direct ISO te wijzigen: ook de ingestelde stabiliteitstijd (standaard 60 seconden) moet voltooid zijn. Als het signaal eerder verloopt, wacht de gekoppelde regeling op het volgende rustsignaal. De knop **Booth is nu vrij (30 sec)** geeft hetzelfde tijdelijke signaal en verlengt de geldigheid niet tot het einde van de stabiliteitstijd. Bij de normale regeling is deze knop niet nodig.
 
 De helper schrijft direct een atomair lokaal signaal en wacht niet op de ISO-operatievergrendeling. Dat voorkomt een deadlock als Darkroom zelf op het externe programma wacht. De app controleert de status vóór de actie, na het tonen van de afdekking en vóór het wijzigen van ISO. Het afdekscherm blokkeert normale schermbediening tijdens navigatie.
 

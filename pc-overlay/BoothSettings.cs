@@ -18,6 +18,7 @@ namespace Jvdp.LightDarkroomOverlay
         public int Margin = 2;
         public int MaximumIso = 25600;
         public bool AllowUntestedDarkroom;
+        public bool RequireSessionSignals;
         public string TestedDarkroomVersion = "";
         public int Stability = 60;
         public bool CustomMapping;
