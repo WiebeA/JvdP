@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Jvdp.Reliability;
 
 namespace Jvdp.AutoUpdater
 {
@@ -305,6 +306,12 @@ namespace Jvdp.AutoUpdater
                 return false;
             }
 
+            string blockedPath = Path.Combine(LocalRoot, "blocked-release.txt");
+            if (File.Exists(blockedPath) && File.ReadAllText(blockedPath).Trim() == release.tag_name)
+            {
+                WriteStatus("blocked", release.tag_name, "Deze versie is na een mislukte installatie geblokkeerd. Kies een nieuwere release.");
+                return false;
+            }
             GitHubAsset installer = FindAsset(release, InstallerAsset);
             GitHubAsset checksums = FindAsset(release, ChecksumsAsset);
             if (installer == null || checksums == null)
@@ -324,12 +331,16 @@ namespace Jvdp.AutoUpdater
                 throw new InvalidDataException(
                     "The installer checksum does not match.");
 
-            string temporaryInstaller = Path.Combine(
-                Path.GetTempPath(), "JvdP-Light-Update-" +
-                release.tag_name + ".exe");
+            string cache = Path.Combine(LocalRoot, "update-cache");
+            Directory.CreateDirectory(cache);
+            string temporaryInstaller = Path.Combine(cache, "JvdP-Light-Update-" + release.tag_name + ".exe");
             File.WriteAllBytes(temporaryInstaller, installerBytes);
-            File.WriteAllText(PendingReleaseTagPath, release.tag_name,
-                new UTF8Encoding(false));
+            if (!BoothCoordination.HasMaintenance(LocalRoot, DateTime.UtcNow) || DarkroomInCurrentSession())
+            {
+                WriteStatus("ready", release.tag_name, "Update gedownload en gecontroleerd. Sluit Darkroom na het evenement en start Onderhoud via Kalibratie en diagnose.");
+                return false;
+            }
+            ReliableFiles.Write(PendingReleaseTagPath, release.tag_name);
             WriteStatus("installing", release.tag_name,
                 "Update " + release.tag_name + " installeren...");
             Log("Installing release " + release.tag_name +
@@ -338,13 +349,21 @@ namespace Jvdp.AutoUpdater
             Process.Start(new ProcessStartInfo {
                 FileName = temporaryInstaller,
                 Arguments = showAfterUpdate
-                    ? "--quiet --show-after-update"
-                    : "--quiet",
+                    ? "--quiet --coordinated-update --show-after-update"
+                    : "--quiet --coordinated-update",
                 UseShellExecute = true,
-                WorkingDirectory = Path.GetTempPath(),
+                WorkingDirectory = cache,
                 WindowStyle = ProcessWindowStyle.Hidden
             });
             return true;
+        }
+
+        private static bool DarkroomInCurrentSession()
+        {
+            int session = Process.GetCurrentProcess().SessionId;
+            foreach (Process process in Process.GetProcessesByName("DarkroomBooth"))
+                using (process) { if (process.SessionId == session) return true; }
+            return false;
         }
 
         private static GitHubRelease GetRelease(string channel)
@@ -391,6 +410,8 @@ namespace Jvdp.AutoUpdater
         private static byte[] Download(string url, string accept)
         {
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.Timeout = 30000;
+            request.ReadWriteTimeout = 30000;
             request.UserAgent = "JvdP-AutoUpdater/" + BuildInfo.Version;
             request.Accept = accept;
             request.AutomaticDecompression =
@@ -467,8 +488,7 @@ namespace Jvdp.AutoUpdater
                     Environment.NewLine +
                     "Message=" + SanitizeStatusValue(message) +
                     Environment.NewLine;
-                File.WriteAllText(StatusPath, content,
-                    new UTF8Encoding(false));
+                ReliableFiles.Write(StatusPath, content);
             }
             catch { }
         }
@@ -483,9 +503,7 @@ namespace Jvdp.AutoUpdater
             try
             {
                 Directory.CreateDirectory(LocalRoot);
-                File.AppendAllText(LogPath,
-                    DateTime.Now.ToString("s") + "  " + message +
-                    Environment.NewLine, new UTF8Encoding(false));
+                ReliableFiles.AppendLog(LogPath, DateTime.Now.ToString("s") + "  " + message);
             }
             catch { }
         }

@@ -68,6 +68,13 @@ Write-BuildInfo $overlayBuildInfo 'Jvdp.LightDarkroomOverlay' $true
 Write-BuildInfo $updaterBuildInfo 'Jvdp.AutoUpdater' $false
 Write-BuildInfo $installerBuildInfo 'Jvdp.LightDarkroomInstaller' $false
 
+$sessionHelper = Join-Path $artifactDirectory 'JvdpSessionSignal.exe'
+& $csc /nologo /target:exe /optimize+ /out:$sessionHelper `
+    (Join-Path $projectRoot 'shared\ReliableFiles.cs') `
+    (Join-Path $projectRoot 'shared\BoothCoordination.cs') `
+    (Join-Path $projectRoot 'session-helper\SessionSignal.cs')
+if ($LASTEXITCODE -ne 0) { throw 'Session helper compilation failed.' }
+
 $overlayExe = Join-Path $artifactDirectory 'JvdpLightDarkroomOverlay.exe'
 $overlayConfig = Join-Path $artifactDirectory 'JvdpLightDarkroomOverlay.exe.config'
 $overlayConfigSource = Join-Path $projectRoot `
@@ -87,14 +94,13 @@ if (-not (Test-Path -LiteralPath $overlayConfigSource)) {
     /out:$overlayExe `
     ("/win32icon:{0}" -f $appIcon) `
     /reference:System.dll `
+    /reference:System.IO.Compression.dll `
+    /reference:System.IO.Compression.FileSystem.dll `
     /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
     $overlayBuildInfo `
-    (Join-Path $projectRoot 'shared\StartMenuShortcut.cs') `
-    (Join-Path $projectRoot 'pc-overlay\InstanceActivation.cs') `
-    (Join-Path $projectRoot 'pc-overlay\LightCheckCycle.cs') `
-    (Join-Path $projectRoot 'pc-overlay\DarkroomNavigation.cs') `
-    (Join-Path $projectRoot 'pc-overlay\LightDarkroomOverlay.cs')
+    (Join-Path $projectRoot 'shared\*.cs') `
+    (Join-Path $projectRoot 'pc-overlay\*.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Overlay compilation failed.' }
 Copy-Item -LiteralPath $overlayConfigSource -Destination $overlayConfig -Force
 
@@ -103,9 +109,13 @@ Copy-Item -LiteralPath $overlayConfigSource -Destination $overlayConfig -Force
     /reference:System.dll `
     /reference:System.Core.dll `
     /reference:System.Security.dll `
+    /reference:System.IO.Compression.dll `
+    /reference:System.IO.Compression.FileSystem.dll `
     /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
     $updaterBuildInfo `
+    (Join-Path $projectRoot 'shared\ReliableFiles.cs') `
+    (Join-Path $projectRoot 'shared\BoothCoordination.cs') `
     (Join-Path $projectRoot 'updater\JvdpAutoUpdater.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
 
@@ -118,7 +128,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
     ("/resource:{0},JvdpLightDarkroomOverlay.exe" -f $overlayExe) `
     ("/resource:{0},JvdpLightDarkroomOverlay.exe.config" -f $overlayConfig) `
     ("/resource:{0},JvdpAutoUpdater.exe" -f $updaterExe) `
+    ("/resource:{0},JvdpSessionSignal.exe" -f $sessionHelper) `
+    ("/resource:{0},SessionGuide.txt" -f (Join-Path $projectRoot 'docs\SESSION-INTEGRATION.md')) `
     $installerBuildInfo `
+    (Join-Path $projectRoot 'shared\ReliableFiles.cs') `
+    (Join-Path $projectRoot 'shared\BoothCoordination.cs') `
+    (Join-Path $projectRoot 'installer\UpdateTransaction.cs') `
     (Join-Path $projectRoot 'shared\StartMenuShortcut.cs') `
     (Join-Path $projectRoot 'installer\InstallerProgram.cs') `
     (Join-Path $projectRoot 'installer\InstallOperations.cs') `

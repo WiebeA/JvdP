@@ -8,14 +8,14 @@ Version is controlled by the single VERSION file.
 ## How it works
 
 1. The ESP reads the LDR on GPIO 0 and converts it to a 0–100 light value.
-2. It sends only `JVDP|light=...` over USB serial.
+2. It sends legacy `JVDP|light=...` plus a versioned `JVDP2` metadata record over USB serial.
 3. The Windows tray application scans all serial ports. A port is accepted only after a
    valid JVDP line is received, so booth PCs do not need a fixed COM number.
 4. The Windows application maps the light value to ISO. Each booth can use the
    centrally maintained default profile or its own locally saved custom profile.
 5. The application waits for a stable PC-mapped target and controls Darkroom
    through its native controls.
-6. The updater checks the selected GitHub release channel every 30 minutes.
+6. The updater checks every 30 minutes; installation waits for maintenance with Darkroom closed.
 
 ## Passwords
 
@@ -125,31 +125,48 @@ Serial-port discovery and Darkroom status inspection run on background threads.
 Slow COM ports or an unresponsive Darkroom control therefore no longer block the
 Windows message loop or make the application show `Not responding`.
 
+## Reliability, calibration and sessions (24.6.0)
+
+See [implementation notes](docs/IMPLEMENTATIE-24.6.0.md) and
+[Darkroom session setup](docs/SESSION-INTEGRATION.md).
+
+In Booth Mode, automatic and manual ISO actions require a fresh idle signal.
+Unknown or stale session state blocks navigation. Initial preparation outside
+Booth Mode remains automatic. Unknown Darkroom versions require an explicit
+operator compatibility confirmation for that exact version after testing.
+
+Open **Verbindingen en technische details → Kalibratie en diagnose** for
+calibration, boundary margins, ISO limits, booth/camera names, profile import/export,
+light history, diagnostics, fault recovery and maintenance. The tray menu also
+opens this window. A sensor interruption restarts the full stability period;
+three consecutive action failures block further automatic attempts.
+
 ## Updating booths
 
-After initial setup no manual PC update is needed. The updater:
+The updater downloads and verifies releases in the background. To install:
 
-1. checks GitHub immediately at Windows sign-in and then every 30 minutes;
-2. downloads the newest allowed release;
-3. verifies the installer SHA-256 checksum;
-4. installs it silently;
-5. restarts the tray application and updater.
+1. Finish the event and close Darkroom.
+2. Open **Kalibratie en diagnose** and choose **Onderhoud starten**.
+3. The updater rechecks the release and the installer closes the light app gracefully.
+4. The previous version is retained until the new app confirms a healthy start.
+5. A failed update restores the previous version and blocks that failed release.
 
-An update started from the settings page reopens the dashboard visibly after
-installation. Automatic background updates continue to restart into the tray.
-Installer errors are written back to the update status so the settings page can
-show a retry action instead of remaining on `Installeren`.
+Maintenance authorization expires after one hour. **Onderhoud stoppen** resumes
+normal operation. A normal update check does not grant maintenance authorization.
+For the first upgrade from an older version without graceful shutdown support,
+close the light app through **Afsluiten** before running the installer.
 
-The default ISO profile ships inside that verified release. Publishing a new stable
-release from the central PC therefore distributes both software changes and a changed
-default profile to every online booth. Changing settings through the UI on one booth
-does not publish them to the other booths; central defaults must be changed in the
-release source and published as a newer release. Booth-specific custom profiles remain
-local.
+Profiles are saved atomically in `booth-profile.json`; existing local settings are
+imported on first launch. Custom profiles survive updates. Firmware is still a
+separate USB/OTA deployment. Old firmware remains readable by the new application.
 
-ESP firmware is included in every release. Firmware deployment remains a
-separate OTA or USB action because a booth PC may not be connected to the ESP
-Wi-Fi network while it has internet access.
+## Verification
+
+Run `./build.ps1 -SkipFirmware`, then `./test-darkroom-navigation.ps1`,
+`./test-desktop-integration.ps1`, `./test-reliability.ps1` and
+`./test-layout-matrix.ps1 -SkipBuild -Headless`. Reliability tests inject installer
+failure only into an isolated test directory; they do not operate the real booth.
+The workflows run these checks alongside the firmware build.
 
 ## Legacy files
 

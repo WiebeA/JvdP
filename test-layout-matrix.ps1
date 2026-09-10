@@ -33,14 +33,13 @@ $runner = Join-Path $OutputDirectory 'LayoutMatrixRunner.exe'
     /out:$runner `
     /reference:System.dll `
     /reference:System.Core.dll `
+    /reference:System.IO.Compression.dll `
+    /reference:System.IO.Compression.FileSystem.dll `
     /reference:System.Drawing.dll `
     /reference:System.Windows.Forms.dll `
     (Join-Path $projectRoot '.generated\OverlayBuildInfo.cs') `
-    (Join-Path $projectRoot 'shared\StartMenuShortcut.cs') `
-    (Join-Path $projectRoot 'pc-overlay\InstanceActivation.cs') `
-    (Join-Path $projectRoot 'pc-overlay\LightCheckCycle.cs') `
-    (Join-Path $projectRoot 'pc-overlay\DarkroomNavigation.cs') `
-    (Join-Path $projectRoot 'pc-overlay\LightDarkroomOverlay.cs') `
+    (Join-Path $projectRoot 'shared\*.cs') `
+    (Join-Path $projectRoot 'pc-overlay\*.cs') `
     (Join-Path $projectRoot 'tools\LayoutMatrixRunner.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Layout matrix runner compilation failed.' }
 

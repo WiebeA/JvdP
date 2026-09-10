@@ -37,7 +37,7 @@ jobs:
             throw "AP and OTA passwords must be different."
           }
       - name: Install PlatformIO
-        run: python -m pip install platformio
+        run: python -m pip install platformio==6.1.18
       - name: Build release
         shell: pwsh
         run: ./build.ps1
@@ -47,6 +47,9 @@ jobs:
       - name: Verify installer shortcut and crash restart handling
         shell: pwsh
         run: ./test-desktop-integration.ps1
+      - name: Verify regulation, session gating and update rollback
+        shell: pwsh
+        run: ./test-reliability.ps1
       - name: Verify 10-size Windows layout matrix
         shell: pwsh
         run: ./test-layout-matrix.ps1 -SkipBuild

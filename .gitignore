@@ -34,3 +34,6 @@ update-token.dat
 desktop.ini
 *.bak
 *~
+
+# PlatformIO temporary Arduino translation unit
+*.ino.cpp

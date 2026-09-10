@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using Jvdp.Reliability;
 
 namespace Jvdp.LightDarkroomInstaller
 {
@@ -32,56 +33,105 @@ namespace Jvdp.LightDarkroomInstaller
                 Path.Combine(installDirectory, UninstallerName);
 
             Directory.CreateDirectory(installDirectory);
-            bool overlayWasVisible = false;
-            if (!testMode)
-                overlayWasVisible = StopRunningComponents();
-
+            string helper = Path.Combine(installDirectory, "JvdpSessionSignal.exe");
             ExtractPayload(PayloadResource, stagedExe);
             ExtractPayload(UpdaterResource, stagedUpdater);
             ExtractPayload(OverlayConfigResource, stagedConfig);
+            ExtractPayload("JvdpSessionSignal.exe", helper + ".new");
+            string guide = Path.Combine(installDirectory, "Sessiekoppeling.txt");
+            ExtractPayload("SessionGuide.txt", guide + ".new");
             ValidatePortableExecutable(stagedExe, "overlay");
             ValidatePortableExecutable(stagedUpdater, "updater");
+            ValidatePortableExecutable(helper + ".new", "sessiekoppeling");
             ValidateConfiguration(stagedConfig);
-            ReplaceStagedFile(stagedExe, installedExe);
-            ReplaceStagedFile(stagedUpdater, installedUpdater);
-            ReplaceStagedFile(stagedConfig, installedConfig);
-            string installedReleaseTag =
-                WriteInstallMetadata(installDirectory);
 
-            if (testMode)
+            using (OperationLease lease = testMode ? null : OperationLease.TryAcquire(0))
             {
-                Jvdp.WindowsIntegration.StartMenuShortcut.Write(
-                    Path.Combine(installDirectory, "start-menu",
-                        Jvdp.WindowsIntegration.StartMenuShortcut.FileName), installedExe);
-                File.AppendAllText(
-                    Path.Combine(installDirectory, "install-test.log"),
-                    DateTime.Now.ToString("s") +
-                    " Payloads extracted and validated.\r\n");
-                return 0;
+                if (!testMode && lease == null)
+                    throw new InvalidOperationException("Een ISO-aanpassing of sessie loopt. Probeer installeren tijdens onderhoud opnieuw.");
+                if (!testMode)
+                {
+                    RequireDarkroomClosed();
+                    StopForUpdate(installDirectory);
+                }
+                UpdateTransaction transaction = new UpdateTransaction(installDirectory);
+                if (transaction.Pending) transaction.Rollback();
+                transaction.Begin(new[] { InstalledExeName, UpdaterExeName, InstalledConfigName, "JvdpSessionSignal.exe",
+                    UninstallerName, "installation.txt", "release-tag.txt", "booth-profile.json", "Sessiekoppeling.txt" });
+                Process startedOverlay = null;
+                try
+                {
+                    ReplaceStagedFile(stagedExe, installedExe);
+                    ReplaceStagedFile(stagedUpdater, installedUpdater);
+                    ReplaceStagedFile(stagedConfig, installedConfig);
+                    ReplaceStagedFile(helper + ".new", helper);
+                    ReplaceStagedFile(guide + ".new", guide);
+                    if (testMode && HasFlag(Environment.GetCommandLineArgs(), "--test-fail-after-files"))
+                        throw new IOException("Simulated interruption after payload replacement.");
+                    if (testMode)
+                    {
+                        WriteInstallMetadata(installDirectory);
+                        Jvdp.WindowsIntegration.StartMenuShortcut.Write(
+                            Path.Combine(installDirectory, "start-menu", Jvdp.WindowsIntegration.StartMenuShortcut.FileName), installedExe);
+                        transaction.Commit();
+                        File.AppendAllText(Path.Combine(installDirectory, "install-test.log"), "Payloads extracted and validated.\r\n");
+                        return 0;
+                    }
+                    File.Copy(Application.ExecutablePath, installedUninstaller, true);
+                    string token = Guid.NewGuid().ToString("N");
+                    ReliableFiles.Write(Path.Combine(installDirectory, "update-health-token.txt"), token);
+                    startedOverlay = Process.Start(new ProcessStartInfo { FileName = installedExe,
+                        Arguments = "--startup", WorkingDirectory = installDirectory, UseShellExecute = false });
+                    if (!WaitForStartupHealth(installDirectory, token, startedOverlay, 20000))
+                        throw new InvalidOperationException("De nieuwe app heeft geen gezonde opstart bevestigd. De vorige versie wordt hersteld.");
+                    string installedReleaseTag = WriteInstallMetadata(installDirectory);
+                    DisableLegacyAgentStartup();
+                    RegisterAutomaticStartup(installedExe, installedUpdater);
+                    Jvdp.WindowsIntegration.StartMenuShortcut.Write(Jvdp.WindowsIntegration.StartMenuShortcut.MenuPath, installedExe);
+                    RegisterUninstaller(installDirectory, installedExe, installedUpdater, installedUninstaller);
+                    transaction.Commit();
+                    WriteInstallerStatus("installed", "Versie " + installedReleaseTag + " is geïnstalleerd en gestart.");
+                    Process.Start(new ProcessStartInfo { FileName = installedUpdater, WorkingDirectory = installDirectory, UseShellExecute = false, CreateNoWindow = true });
+                    if (showAfterUpdate || !quiet) Process.Start(installedExe);
+                    ShowMessage(ProductName + " is geïnstalleerd. Open Kalibratie en diagnose om de booth in te stellen.", MessageBoxIcon.Information, quiet);
+                    return 0;
+                }
+                catch
+                {
+                    // After commit the new version is healthy. A shortcut or
+                    // updater launch failure must never kill it or claim rollback.
+                    if (!transaction.Pending) throw;
+                    if (startedOverlay != null)
+                    {
+                        try { if (!startedOverlay.HasExited) { startedOverlay.Kill(); startedOverlay.WaitForExit(5000); } } catch { }
+                    }
+                    transaction.Rollback();
+                    if (!testMode)
+                    {
+                        ReliableFiles.Write(Path.Combine(installDirectory, "blocked-release.txt"), "v" + Version);
+                        if (File.Exists(installedExe)) StartComponents(installedExe, installedUpdater, installDirectory, true, true);
+                    }
+                    throw;
+                }
+                finally { if (startedOverlay != null) startedOverlay.Dispose(); }
             }
+        }
 
-            File.Copy(Application.ExecutablePath,
-                installedUninstaller, true);
-            DisableLegacyAgentStartup();
-            RegisterAutomaticStartup(installedExe, installedUpdater);
-            Jvdp.WindowsIntegration.StartMenuShortcut.Write(
-                Jvdp.WindowsIntegration.StartMenuShortcut.MenuPath, installedExe);
-            RegisterUninstaller(installDirectory, installedExe,
-                installedUpdater, installedUninstaller);
-            StartComponents(installedExe, installedUpdater,
-                installDirectory, quiet,
-                showAfterUpdate || overlayWasVisible);
-            WriteInstallerStatus("installed",
-                "Versie " + installedReleaseTag + " is geïnstalleerd.");
-            ShowMessage(
-                ProductName + " is geinstalleerd en gestart.\r\n\r\n" +
-                "De lichtsensor-app en automatische updater starten voortaan " +
-                "wanneer deze Windows-gebruiker zich aanmeldt.\r\n\r\n" +
-                "Je kunt de software altijd opnieuw openen via Start: " +
-                "zoek op JvdP, Lichtregeling of Lichtsensor.\r\n\r\n" +
-                "Installatiemap:\r\n" + installDirectory,
-                MessageBoxIcon.Information, quiet);
-            return 0;
+        private static bool WaitForStartupHealth(string root, string token, Process process, int timeout)
+        {
+            Stopwatch timer = Stopwatch.StartNew();
+            while (timer.ElapsedMilliseconds < timeout)
+            {
+                if (process == null || process.HasExited) return false;
+                try
+                {
+                    string[] lines = File.ReadAllLines(Path.Combine(root, "update-health-ok.txt"));
+                    if (lines.Length == 3 && lines[0] == token && lines[1] == Version && lines[2] == process.Id.ToString()) return true;
+                }
+                catch (IOException) { }
+                Thread.Sleep(100);
+            }
+            return false;
         }
 
         private static int Uninstall(bool quiet)
@@ -203,11 +253,7 @@ namespace Jvdp.LightDarkroomInstaller
         {
             string pendingTagPath =
                 Path.Combine(installDirectory, "pending-release-tag.txt");
-            string releaseTag = File.Exists(pendingTagPath)
-                ? File.ReadAllText(pendingTagPath).Trim()
-                : "v" + Version;
-            if (String.IsNullOrWhiteSpace(releaseTag))
-                releaseTag = "v" + Version;
+            string releaseTag = "v" + Version;
 
             string metadata =
                 "Product=" + ProductName + "\r\n" +

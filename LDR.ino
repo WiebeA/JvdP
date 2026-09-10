@@ -41,6 +41,8 @@ bool apActive = false;
 String stationSsid;
 unsigned long lastSensorRead = 0;
 unsigned long lastSerialPrint = 0;
+uint32_t serialSequence = 0;
+String sensorId;
 
 int readLdrFiltered() {
   int samples[SAMPLE_COUNT];
@@ -101,10 +103,19 @@ void connectToLocalWifi() {
   WiFi.setAutoReconnect(true);
   WiFi.begin(stationSsid.c_str(), password.c_str());
 
-  const unsigned long startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < 15000) {
-    delay(250);
+  // Wi-Fi association is asynchronous; USB measurements must keep flowing
+  // even when a previously configured access point is unavailable.
+}
+
+String jsonEscape(const String& input) {
+  String out;
+  for (unsigned int i = 0; i < input.length(); ++i) {
+    const char c = input[i];
+    if (c == '"' || c == '\\') out += '\\';
+    if (static_cast<uint8_t>(c) < 32) out += ' ';
+    else out += c;
   }
+  return out;
 }
 
 String stateJson() {
@@ -118,13 +129,13 @@ String stateJson() {
   response += ",\"apActive\":";
   response += (apActive ? "true" : "false");
   response += ",\"apSsid\":\"";
-  response += AP_SSID;
+  response += jsonEscape(AP_SSID);
   response += "\",\"apIp\":\"";
   response += AP_IP.toString();
   response += "\",\"wifiConnected\":";
   response += (wifiConnected ? "true" : "false");
   response += ",\"wifiSsid\":\"";
-  response += stationSsid;
+  response += jsonEscape(stationSsid);
   response += "\",\"wifiIp\":\"";
   response += (wifiConnected ? WiFi.localIP().toString() : "");
   response += "\",\"firmwareVersion\":\"";
@@ -193,6 +204,9 @@ void updateSensor(unsigned long now) {
 
 void setup() {
   Serial.begin(115200);
+  char identifier[17];
+  snprintf(identifier, sizeof(identifier), "%016llX", ESP.getEfuseMac());
+  sensorId = identifier;
   analogReadResolution(12);
   analogSetPinAttenuation(LDR_PIN, ADC_11db);
   delay(250);
@@ -212,5 +226,12 @@ void loop() {
     lastSerialPrint = now;
     Serial.print("JVDP|light=");
     Serial.println(lightPercent);
+    // Separate versioned record preserves compatibility with installed v1 apps.
+    Serial.print("JVDP2|light="); Serial.print(lightPercent);
+    Serial.print("|raw="); Serial.print(rawLight);
+    Serial.print("|id="); Serial.print(sensorId);
+    Serial.print("|fw="); Serial.print(JVDP_VERSION);
+    Serial.print("|seq="); Serial.print(++serialSequence);
+    Serial.print("|uptime="); Serial.println(now);
   }
 }

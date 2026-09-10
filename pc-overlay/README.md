@@ -1,5 +1,10 @@
 # JvdP Light to Darkroom
 
+For current 24.6.0 behavior, maintenance updates and session gating, see
+[implementation notes](../docs/IMPLEMENTATIE-24.6.0.md) and
+[session integration](../docs/SESSION-INTEGRATION.md). The navigation history below
+describes earlier builds; current automatic actions require the documented session preflight.
+
 Windows system-tray application for the JvdP ESP light sensor and Darkroom Booth.
 
 At Windows sign-in the application starts silently in the system tray. Double-click

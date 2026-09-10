@@ -55,11 +55,9 @@ namespace Jvdp.LightDarkroomInstaller
                 }
                 catch (Exception exception)
                 {
-                    WriteInstallerStatus("error",
+                    if (String.IsNullOrWhiteSpace(testDirectory)) WriteInstallerStatus("error",
                         "Installatie mislukt: " + exception.Message);
-                    if (quiet && !uninstall &&
-                        String.IsNullOrWhiteSpace(testDirectory))
-                        TryRestartOverlayAfterFailure();
+
                     ShowMessage(
                         "De installatie is niet voltooid.\r\n\r\n" +
                         exception.Message,
