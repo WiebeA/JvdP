@@ -33,7 +33,21 @@ internal static class DarkroomNavigationTests
         internal int Restores;
         internal int Waited;
         internal bool UnstableIso;
+        internal string IsoValue = "1600";
+        internal bool DropDownOpen;
+        internal bool RevertOnReopen;
+        internal int MatchingIsoReads;
+        internal int CommandDelay;
+        internal int TimeoutOnCommand;
         private int isoReads;
+        private int valueReads;
+        public string ReadIsoValue(IntPtr control)
+        {
+            valueReads++;
+            return MatchingIsoReads > 0 && valueReads > MatchingIsoReads ? "800" : IsoValue;
+        }
+        public bool IsIsoDropDownOpen(IntPtr control) { return DropDownOpen; }
+        public void RequestBoothStart() { SendCommand(DarkroomNavigation.StartBoothCommand); }
         public bool BoothVisible { get { return InBooth; } }
         public bool BoothPresented { get { return InBooth && Presented && !CoversVisible; } }
         public bool EditorAvailable
@@ -89,10 +103,13 @@ internal static class DarkroomNavigationTests
             PresentCalls++;
             Presented = PresentWorks && PresentCalls >= PresentAfterAttempts;
         }
-        public void SendCommand(int command)
+        public void SendCommand(int command, int timeoutMilliseconds = 3000)
         {
             RequireReady();
             Commands.Add(command);
+            if (command == TimeoutOnCommand || CommandDelay > timeoutMilliseconds)
+                throw new TimeoutException("Command outcome unknown");
+            Wait(CommandDelay);
             if (command == DarkroomNavigation.OriginalsPageCommand)
                 SettingsOpen = false;
             if (command == DarkroomNavigation.SettingsPageCommand)
@@ -100,6 +117,7 @@ internal static class DarkroomNavigationTests
                 // Real Darkroom reselecting Settings opens the modal picker.
                 if (SettingsOpen) SettingsMenu = true;
                 SettingsOpen = true;
+                if (RevertOnReopen) IsoValue = "800";
             }
             if (command == DarkroomNavigation.NextSettingsPageCommand)
                 Page = (Page + 1) % 11;
@@ -148,6 +166,47 @@ internal static class DarkroomNavigationTests
             FakePort open = new FakePort { SettingsOpen = true, Page = 5 };
             Check(Create(open).OpenCamera(Deadline) == new IntPtr(107) &&
                 open.Commands.Count == 0, "Reuse only a stable visible ISO");
+
+            FakePort complete = new FakePort { Page = 1, CommandDelay = 800 };
+            n = Create(complete);
+            n.OpenCamera(Deadline); n.VerifyCameraIso("1600", Deadline);
+            n.ReopenCamera(Deadline); n.VerifyCameraIso("1600", Deadline);
+            n.StartBoothAfterIso("1600", Deadline);
+            Check(complete.InBooth && complete.Page == complete.CameraPage && complete.IsoValue == "1600",
+                "Slow page commands complete, ISO survives reopening and Camera remains the last settings page");
+
+            FakePort wrongPage = new FakePort { SettingsOpen = true, Page = 5 };
+            n = Create(wrongPage); n.OpenCamera(Deadline); n.VerifyCameraIso("1600", Deadline);
+            wrongPage.Page = 6;
+            Fails(delegate { n.StartBoothAfterIso("1600", Deadline); }, "Late page change before Booth start");
+            Check(!wrongPage.InBooth && wrongPage.Commands.Count == 0, "No Start command after Camera page is lost");
+
+            FakePort highlightOnly = new FakePort { SettingsOpen = true, Page = 5, DropDownOpen = true };
+            n = Create(highlightOnly);
+            Fails(delegate { n.VerifyCameraIso("1600", Deadline); }, "Highlighted but uncommitted ISO");
+            Fails(delegate { n.StartBoothAfterIso("1600", Deadline); }, "Open ISO dropdown before Start");
+            Check(!highlightOnly.InBooth, "Highlighting a value does not count as a completed ISO change");
+
+            FakePort reverting = new FakePort { SettingsOpen = true, Page = 5, RevertOnReopen = true };
+            n = Create(reverting); n.VerifyCameraIso("1600", Deadline); n.ReopenCamera(Deadline);
+            Fails(delegate { n.VerifyCameraIso("1600", Deadline); }, "ISO reverts after reopening Camera");
+            Check(!reverting.InBooth && !reverting.Commands.Contains(33776), "Reverted ISO cannot start Booth Mode");
+
+            FakePort transientIso = new FakePort { SettingsOpen = true, Page = 5, MatchingIsoReads = 5 };
+            n = Create(transientIso);
+            Fails(delegate { n.VerifyCameraIso("1600", Deadline); }, "Brief matching ISO followed by rollback");
+
+            FakePort timedOut = new FakePort { InBooth = true, TimeoutOnCommand = 662 };
+            n = Create(timedOut);
+            Fails(delegate { n.OpenCamera(Deadline); }, "Page command that has not completed");
+            Check(timedOut.Commands.Count == 3 && !n.CanRestoreBoothAfterIso(null),
+                "A timed out page command stops further navigation and cannot trigger unconfirmed recovery");
+
+            FakePort startTimeout = new FakePort { InBooth = true };
+            n = Create(startTimeout); n.OpenCamera(Deadline);
+            startTimeout.TimeoutOnCommand = 33776;
+            Fails(delegate { n.StartBoothAfterIso("1600", Deadline); }, "Start command timeout");
+            Check(!n.CanRestoreBoothAfterIso("1600"), "A timed out Start is never repeated by recovery");
 
             for (int page = 0; page < 11; page++)
             {
@@ -223,6 +282,8 @@ internal static class DarkroomNavigationTests
             n.OpenCamera(Deadline);
             Check(booth.Exits == 1 && booth.Restores == 1 && n.ShouldRestoreBooth,
                 "Exit identified booth before restoring editor");
+            Check(!n.CanRestoreBoothAfterIso(null) && n.CanRestoreBoothAfterIso("1600"),
+                "Recovery of an existing Booth requires a confirmed ISO");
             n.StartBooth(Deadline);
             Check(booth.InBooth && !n.ShouldRestoreBooth &&
                 booth.Commands[booth.Commands.Count - 1] == 33776,

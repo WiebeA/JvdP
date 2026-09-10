@@ -25,7 +25,11 @@ namespace Jvdp.LightDarkroomOverlay
         void ExitBooth();
         void RestoreEditor();
         void PresentBooth();
-        void SendCommand(int command);
+        // Returns only after the command handler completes; timeout stops the flow.
+        void SendCommand(int command, int timeoutMilliseconds = 3000);
+        void RequestBoothStart();
+        string ReadIsoValue(IntPtr control);
+        bool IsIsoDropDownOpen(IntPtr control);
         void Wait(int milliseconds);
     }
 
@@ -94,11 +98,11 @@ namespace Jvdp.LightDarkroomOverlay
 
             // Selecting Settings AGAIN opens its modal picker. First select
             // Originals so this is a page transition, not a repeated selection.
-            // Both commands go to the same native queue, in this order. Neither
+            // Each command must finish before the next one is sent. Neither
             // depends on focus, timing a mouse click or a private toolbar object.
             log("Opening Settings through Originals -> Settings (543 -> 545).");
-            port.SendCommand(OriginalsPageCommand);
-            port.SendCommand(SettingsPageCommand);
+            SendCommand(OriginalsPageCommand, deadlineUtc);
+            SendCommand(SettingsPageCommand, deadlineUtc);
             combo = WaitForIso(deadlineUtc, 500);
             if (combo != IntPtr.Zero)
                 return combo;
@@ -109,7 +113,7 @@ namespace Jvdp.LightDarkroomOverlay
             {
                 Remaining(deadlineUtc);
                 EnsureReady(deadlineUtc);
-                port.SendCommand(NextSettingsPageCommand);
+                SendCommand(NextSettingsPageCommand, deadlineUtc);
                 log("Darkroom settings page advance " + page + "/10.");
                 combo = WaitForIso(deadlineUtc, 400);
                 if (combo != IntPtr.Zero)
@@ -118,6 +122,53 @@ namespace Jvdp.LightDarkroomOverlay
             throw new InvalidOperationException(
                 "Darkroom toont geen bruikbare ISO-keuze op de Camera-pagina. " +
                 "Controleer de cameraverbinding in Darkroom.");
+        }
+
+        internal IntPtr ReopenCamera(DateTime deadlineUtc)
+        {
+            EnsureReady(deadlineUtc);
+            if (port.VisibleIsoControl == IntPtr.Zero)
+                throw new InvalidOperationException("Camera Settings is niet meer actief. De ISO is niet bevestigd.");
+            SendCommand(OriginalsPageCommand, deadlineUtc);
+            SendCommand(SettingsPageCommand, deadlineUtc);
+            IntPtr camera = WaitForIso(deadlineUtc, 1500);
+            if (camera == IntPtr.Zero)
+                throw new InvalidOperationException("Darkroom keerde niet terug naar Camera Settings. Booth Mode wordt niet gestart.");
+            log("Camera Settings reopened for an independent ISO readback.");
+            return camera;
+        }
+
+        internal void VerifyCameraIso(string expected, DateTime deadlineUtc)
+        {
+            IntPtr camera = WaitForIso(deadlineUtc, 1500);
+            if (camera == IntPtr.Zero) throw new InvalidOperationException("Camera Settings ontbreekt bij de ISO-controle.");
+            int confirmations = 0;
+            if (!WaitUntil(delegate
+            {
+                EnsureReady(deadlineUtc);
+                if (port.VisibleIsoControl != camera)
+                    throw new InvalidOperationException("De instellingenpagina veranderde tijdens de ISO-controle. Booth Mode wordt niet gestart.");
+                bool accepted = !port.IsIsoDropDownOpen(camera) && port.ReadIsoValue(camera) == expected;
+                confirmations = accepted ? confirmations + 1 : 0;
+                return confirmations >= 9;
+            }, deadlineUtc, 3000))
+                throw new InvalidOperationException("Darkroom heeft ISO " + expected + " niet blijvend bevestigd op Camera Settings. Booth Mode wordt niet gestart.");
+            log("Camera Settings confirms ISO " + expected + " with the dropdown closed.");
+        }
+
+        internal void StartBoothAfterIso(string expected, DateTime deadlineUtc)
+        {
+            EnsureReady(deadlineUtc);
+            IntPtr camera = port.VisibleIsoControl;
+            if (camera == IntPtr.Zero || port.IsIsoDropDownOpen(camera) || port.ReadIsoValue(camera) != expected)
+                throw new InvalidOperationException("Laatste ISO-controle mislukt: Camera Settings moet ISO " + expected + " tonen voordat Booth Mode start.");
+            StartBooth(deadlineUtc);
+        }
+
+        private void SendCommand(int command, DateTime deadlineUtc)
+        {
+            int remaining = Remaining(deadlineUtc);
+            port.SendCommand(command, Math.Min(8000, remaining));
         }
 
         internal void StartBooth(DateTime deadlineUtc)
@@ -132,8 +183,8 @@ namespace Jvdp.LightDarkroomOverlay
                     "het hoofdvenster is geblokkeerd of niet beschikbaar.");
             // A queued Start must not be sent a second time by recovery if the
             // visible confirmation is late; its outcome is then unknown.
-            port.SendCommand(StartBoothCommand);
             boothStartRequested = true;
+            port.RequestBoothStart();
             if (!WaitUntil(delegate { return port.BoothVisible; },
                     deadlineUtc, 5000))
                 throw new InvalidOperationException(
@@ -200,6 +251,11 @@ namespace Jvdp.LightDarkroomOverlay
             }
         }
 
+        internal bool CanRestoreBoothAfterIso(string confirmedIso)
+        {
+            return !String.IsNullOrWhiteSpace(confirmedIso) && ShouldRestoreBooth;
+        }
+
         private IntPtr WaitForIso(DateTime deadlineUtc, int budget)
         {
             IntPtr previous = IntPtr.Zero;
@@ -247,7 +303,7 @@ namespace Jvdp.LightDarkroomOverlay
         }
     }
 
-    internal sealed class NativeDarkroomNavigation : IDarkroomNavigationPort
+    internal sealed partial class NativeDarkroomNavigation : IDarkroomNavigationPort
     {
         private const int ToolbarControlId = 4083;
         private const int IsoControlId = 107;
@@ -391,7 +447,37 @@ namespace Jvdp.LightDarkroomOverlay
             if (editor == IntPtr.Zero || !IsWindowVisible(editor) ||
                 !IsWindowEnabled(editor) || IsIconic(editor))
                 return IntPtr.Zero;
-            return FindChild(editor, IsoControlId, true, true);
+            IntPtr result = IntPtr.Zero;
+            bool ambiguous = false;
+            EnumProc inspect = delegate(IntPtr child, IntPtr unused)
+            {
+                if (GetDlgCtrlID(child) != IsoControlId || !IsWindowVisible(child) ||
+                    !IsWindowEnabled(child) || !IsUsableCombo(child) || !HasCameraControls(GetParent(child))) return true;
+                if (result != IntPtr.Zero) { ambiguous = true; return false; }
+                result = child; return true;
+            };
+            EnumChildWindows(editor, inspect, IntPtr.Zero);
+            GC.KeepAlive(inspect);
+            return ambiguous ? IntPtr.Zero : result;
+        }
+
+        private static bool HasCameraControls(IntPtr parent)
+        {
+            // The captured Camera page has mode 104, aperture 105 and shutter 106
+            // beside ISO 107. A control ID alone does not identify a settings page.
+            bool mode = false, aperture = false, shutter = false;
+            EnumProc inspect = delegate(IntPtr child, IntPtr unused)
+            {
+                if (IsWindowVisible(child))
+                {
+                    int id = GetDlgCtrlID(child);
+                    mode |= id == 104; aperture |= id == 105; shutter |= id == 106;
+                }
+                return !(mode && aperture && shutter);
+            };
+            EnumChildWindows(parent, inspect, IntPtr.Zero);
+            GC.KeepAlive(inspect);
+            return mode && aperture && shutter;
         }
 
         public bool TryDismissSettingsMenu(int timeoutMilliseconds)
@@ -626,10 +712,30 @@ namespace Jvdp.LightDarkroomOverlay
             SetForegroundWindow(booths[0]);
         }
 
-        public void SendCommand(int command)
+        public void SendCommand(int command, int timeoutMilliseconds = 3000)
         {
             RequireReady();
-            PostChecked(EditorWindow, 0x0111, new IntPtr(command), IntPtr.Zero);
+            SendCompleted(EditorWindow, 0x0111, new IntPtr(command), IntPtr.Zero, timeoutMilliseconds);
+        }
+
+        public void RequestBoothStart()
+        {
+            RequireReady();
+            // This is the terminal command, after all navigation/ISO messages
+            // completed. Booth can own a modal loop: confirm its visible window
+            // instead of waiting for the command handler to return.
+            PostChecked(EditorWindow, 0x0111, new IntPtr(DarkroomNavigation.StartBoothCommand), IntPtr.Zero);
+        }
+
+        internal static IntPtr SendCompleted(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, int timeout)
+        {
+            IntPtr result;
+            if (timeout <= 0) throw new TimeoutException("De maximale Darkroom-actietijd is verstreken.");
+            if (SendMessageTimeout(window, message, wParam, lParam, 0x0001 | 0x0020,
+                (uint)timeout, out result) == IntPtr.Zero)
+                throw new TimeoutException("Darkroom heeft opdracht 0x" + message.ToString("X") +
+                    " niet binnen " + timeout + " ms verwerkt. Er worden geen vervolgopdrachten verstuurd.");
+            return result;
         }
 
         public void Wait(int milliseconds) { Thread.Sleep(milliseconds); }
@@ -758,6 +864,7 @@ namespace Jvdp.LightDarkroomOverlay
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsChild(IntPtr parent, IntPtr child);
+        [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
         [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();

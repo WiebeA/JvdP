@@ -1,6 +1,33 @@
 # Darkroom flow and logging
 
-## Current flow — 24.5.16
+## Camera confirmation — 24.6.3
+
+Settings navigation now waits for each `WM_COMMAND` handler to complete using a
+bounded `SendMessageTimeout` before issuing another settings command. The maximum
+ISO action budget is 30 seconds, with up to eight seconds for a single command.
+This prevents an accumulation of Next Settings requests on a slow booth. The
+terminal Start Booth request remains asynchronous and is confirmed through the
+visible Booth surface, since starting Booth can own a modal message loop.
+
+Camera identity requires visible mode (104), aperture (105) and shutter (106)
+controls in the same parent subtree as the ISO ComboBox (107), as captured in
+`pc-agent/Darkroom-UI-Inspection.csv`. Ambiguous matches and ordinary 107 controls
+on other pages are rejected. ISO keyboard messages, including Enter, complete
+before readback. The dropdown must be closed and its value stable; the app then
+reopens Camera Settings and checks the value again. A final page/value check
+precedes Start Booth. A failed, unconfirmed ISO action cannot restart Booth via
+recovery. Background polling ignores in-flight actions and open dropdowns.
+
+The native test runs real Windows controls in an isolated off-screen process,
+including a delayed settings handler, duplicate control IDs on other pages and
+selection changes that are rolled back when the page reopens. It does not operate
+Darkroom or a camera. See [24.6.3 release notes](../docs/RELEASE-24.6.3.md).
+
+The completion and selection-notification semantics are documented by Microsoft:
+[SendMessageTimeout](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagetimeoutw)
+and [CBN_SELENDOK](https://learn.microsoft.com/en-us/windows/win32/controls/cbn-selendok).
+
+## Earlier flow — 24.5.16
 
 ### Crash prevention and reopening
 

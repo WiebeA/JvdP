@@ -25,7 +25,7 @@ namespace Jvdp.LightDarkroomOverlay
         private const uint ModControl = 0x0002;
         private const int WmHotkey = 0x0312;
         private const int WmActivateExistingInstance = 0x8001;
-        private const int DarkroomActionDeadlineMilliseconds = 10000;
+        private const int DarkroomActionDeadlineMilliseconds = 30000;
         private static readonly string BuildTag = BuildInfo.Version;
         private const string DefaultCoverTitle = "Please wait!";
         private const string DefaultCoverMessage =
@@ -2633,70 +2633,6 @@ namespace Jvdp.LightDarkroomOverlay
                 ReadComboItems(combo), requestedIso, lightRegulation.MaximumIso);
         }
 
-        private string SelectIsoWithoutCoordinates(
-            IntPtr window, ref IntPtr combo, ComboItem target,
-            DateTime actionDeadlineUtc)
-        {
-            combo = WaitForStableVisibleChildById(
-                window, 107,
-                Math.Min(1400,
-                    GetRemainingActionMilliseconds(actionDeadlineUtc)));
-            if (combo == IntPtr.Zero)
-                throw new InvalidOperationException(
-                    "Darkroom ISO control 107 did not remain visibly stable.");
-            Log("Opening the native ISO dropdown.");
-            if (!PostMessage(
-                    combo, 0x014f, new IntPtr(1), IntPtr.Zero))
-                throw new InvalidOperationException(
-                    "Darkroom rejected opening the native ISO dropdown.");
-            SleepWithinActionDeadline(actionDeadlineUtc, 120);
-            int currentIndex = (int)SendMessageWithTimeout(
-                combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
-            if (currentIndex < 0)
-                throw new InvalidOperationException(
-                    "Darkroom did not expose its current ISO list position.");
-            int steps = Math.Abs(target.Index - currentIndex);
-            Keys direction = target.Index > currentIndex
-                ? Keys.Down : Keys.Up;
-            for (int step = 0; step < steps; step++)
-            {
-                PostComboKey(combo, direction);
-                SleepWithinActionDeadline(actionDeadlineUtc, 25);
-            }
-            Log("Native dropdown reached ISO " + target.Value +
-                "; confirming the highlighted item.");
-            PostComboKey(combo, Keys.Enter);
-
-            DateTime deadline = DateTime.UtcNow.AddMilliseconds(2000);
-            if (deadline > actionDeadlineUtc)
-                deadline = actionDeadlineUtc;
-            while (DateTime.UtcNow < deadline)
-            {
-                long selected = SendMessageWithTimeout(
-                    combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
-                if (selected == target.Index)
-                {
-                    SleepWithinActionDeadline(actionDeadlineUtc, 200);
-                    return "native ComboBox dropdown keyboard selection " +
-                        "(coordinate-free, timeout-safe)";
-                }
-                Thread.Sleep(80);
-            }
-            throw new InvalidOperationException(
-                "Darkroom did not accept the ISO dropdown selection in time.");
-        }
-
-        private static void PostComboKey(IntPtr combo, Keys key)
-        {
-            if (!PostMessage(
-                    combo, 0x0100,
-                    new IntPtr((int)key), IntPtr.Zero) ||
-                !PostMessage(
-                    combo, 0x0101,
-                    new IntPtr((int)key), IntPtr.Zero))
-                throw new InvalidOperationException(
-                    "Darkroom rejected native ISO dropdown keyboard input.");
-        }
         private void RefreshUi()
         {
             // Timer messages, control layout and failed action starts can reenter
@@ -3068,11 +3004,11 @@ namespace Jvdp.LightDarkroomOverlay
                     processId, window) != IntPtr.Zero;
                 if (previousBoothMode && !boothMode && !manualActionRunning) isoConfirmation.Clear();
 
-                IntPtr isoCombo = NativeDarkroomNavigation.FindVisibleIsoControl(window);
-                if (isoCombo != IntPtr.Zero)
+                IntPtr isoCombo = manualActionRunning ? IntPtr.Zero : NativeDarkroomNavigation.FindVisibleIsoControl(window);
+                if (isoCombo != IntPtr.Zero && !NativeDarkroomNavigation.IsSelectionOpen(isoCombo))
                 {
                     string value = ReadComboSelection(isoCombo);
-                    if (!String.IsNullOrWhiteSpace(value))
+                    if (!manualActionRunning && !String.IsNullOrWhiteSpace(value))
                     {
                         currentDarkroomIso = value;
                         currentIsoReadAt = DateTime.Now;
@@ -3170,18 +3106,7 @@ namespace Jvdp.LightDarkroomOverlay
         }
         private static string ReadComboSelection(IntPtr combo)
         {
-            long selected = SendMessageWithTimeout(
-                combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
-            if (selected < 0)
-                return "";
-            long length = SendMessageWithTimeout(
-                combo, 0x0149, new IntPtr(selected), IntPtr.Zero).ToInt64();
-            if (length < 0 || length > 128)
-                return "";
-            StringBuilder value = new StringBuilder((int)length + 1);
-            SendMessageWithTimeout(
-                combo, 0x0148, new IntPtr(selected), value);
-            return value.ToString();
+            return NativeDarkroomNavigation.ReadSelection(combo);
         }
 
         private static IntPtr SendMessageWithTimeout(

@@ -148,12 +148,7 @@ namespace Jvdp.LightDarkroomOverlay
                     combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
                 if (currentIndex == target.Index)
                 {
-                    confirmedIso = target.Value;
-                    currentDarkroomIso = target.Value;
-                    currentIsoReadAt = DateTime.Now;
-                    finalStatus = "No change - Darkroom is already at target ISO " +
-                                  target.Value + ".";
-                    Log(finalStatus);
+                    Log("ISO dropdown already shows " + target.Value + "; verifying Camera Settings before starting Booth Mode.");
                 }
                 else
                 {
@@ -162,36 +157,29 @@ namespace Jvdp.LightDarkroomOverlay
                     SetManualActionStatus(
                         "Stap 2/3 — ISO " + target.Value + " toepassen…");
                     selectionAttempted = true;
-                    string selectionMethod = SelectIsoWithoutCoordinates(
-                        window, ref combo, target, actionDeadlineUtc);
-                    Log("ISO selection method: " + selectionMethod + ".");
-                    SleepWithinActionDeadline(actionDeadlineUtc, 250);
+                    native.SelectIso(target.Value, actionDeadlineUtc);
+                    Log("ISO selection completed synchronously, including Enter.");
                     Log("Checking native Darkroom error dialogs (no accessibility scan).");
                     if (native.DismissCameraPropertyError())
                         throw new InvalidOperationException(
                             "Darkroom reported that ISO " +
                             target.Value + " could not be set.");
-                    native.RequireReady();
-                    string confirmed = ReadComboSelection(combo);
-                    if (!String.Equals(
-                            confirmed, target.Value,
-                            StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidOperationException(
-                            "Darkroom did not confirm target ISO " +
-                            target.Value + ".");
-                    confirmedIso = confirmed;
-                    currentDarkroomIso = confirmed;
-                    currentIsoReadAt = DateTime.Now;
-                    finalStatus = "Done - Darkroom ISO now matches target ISO " +
-                                  confirmed + ".";
-                    Log(finalStatus);
                 }
+
+                navigation.VerifyCameraIso(target.Value, actionDeadlineUtc);
+                combo = navigation.ReopenCamera(actionDeadlineUtc);
+                navigation.VerifyCameraIso(target.Value, actionDeadlineUtc);
+                confirmedIso = target.Value;
+                currentDarkroomIso = confirmedIso;
+                currentIsoReadAt = DateTime.Now;
+                finalStatus = "ISO " + confirmedIso + " bevestigd na opnieuw openen van Camera Settings.";
+                Log(finalStatus);
 
                 LogActionTiming(
                     actionTimer, ref previousStepMilliseconds,
                     "ISO verified");
                 SetManualActionStatus("Stap 3/3 — Booth Mode starten…");
-                navigation.StartBooth(DateTime.UtcNow.AddSeconds(5));
+                navigation.StartBoothAfterIso(confirmedIso, DateTime.UtcNow.AddSeconds(5));
                 if (!keepCoverVisible)
                 {
                     navigation.RevealBooth(HideFullscreenCovers, DateTime.UtcNow.AddSeconds(3));
@@ -215,30 +203,25 @@ namespace Jvdp.LightDarkroomOverlay
                 finalStatus = DarkroomActionStatus.Failure(
                     confirmedIso, selectionAttempted, exception.Message);
                 Log(finalStatus);
-                if (navigation != null && navigation.ShouldRestoreBooth)
+                if (navigation != null && navigation.CanRestoreBoothAfterIso(confirmedIso))
                 {
                     try
                     {
                         Log("Fail-safe recovery: restoring Booth Mode...");
-                        navigation.StartBooth(DateTime.UtcNow.AddSeconds(5));
+                        navigation.StartBoothAfterIso(confirmedIso, DateTime.UtcNow.AddSeconds(5));
                         if (!keepCoverVisible)
                         {
                             navigation.RevealBooth(HideFullscreenCovers, DateTime.UtcNow.AddSeconds(3));
                             coverShown = false;
                         }
                         boothMode = true;
-                        if (confirmedIso != null)
-                        {
-                            failed = false;
-                            lastAppliedTargetIso = desiredIso;
-                            lastAppliedDarkroomProcessId = process.Id;
-                            isoConfirmation.Confirm(process.Id, desiredIso, confirmedIso);
-                            initialPreparationDone = true;
-                            finalStatus = "ISO " + confirmedIso +
-                                " is door Darkroom bevestigd. Booth Mode is hersteld.";
-                        }
-                        else
-                            finalStatus += " Booth Mode is hersteld.";
+                        failed = false;
+                        lastAppliedTargetIso = desiredIso;
+                        lastAppliedDarkroomProcessId = process.Id;
+                        isoConfirmation.Confirm(process.Id, desiredIso, confirmedIso);
+                        initialPreparationDone = true;
+                        finalStatus = "ISO " + confirmedIso +
+                            " is door Darkroom bevestigd. Booth Mode is hersteld.";
                         Log("Fail-safe recovery completed.");
                     }
                     catch (Exception recoveryException)
@@ -248,6 +231,11 @@ namespace Jvdp.LightDarkroomOverlay
                         Log("Fail-safe recovery failed: " +
                             recoveryException.Message);
                     }
+                }
+                if (confirmedIso == null)
+                {
+                    currentDarkroomIso = "Unknown";
+                    finalStatus += " ISO niet bevestigd; Booth Mode is niet opnieuw gestart.";
                 }
             }
             finally
