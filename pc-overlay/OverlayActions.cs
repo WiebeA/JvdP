@@ -158,7 +158,7 @@ namespace Jvdp.LightDarkroomOverlay
                         "Stap 2/3 — ISO " + target.Value + " toepassen…");
                     selectionAttempted = true;
                     native.SelectIso(target.Value, actionDeadlineUtc);
-                    Log("ISO selection completed synchronously, including Enter.");
+                    Log("Queued ISO keys processed; dropdown closed after Enter.");
                     Log("Checking native Darkroom error dialogs (no accessibility scan).");
                     if (native.DismissCameraPropertyError())
                         throw new InvalidOperationException(
@@ -199,6 +199,11 @@ namespace Jvdp.LightDarkroomOverlay
             catch (Exception exception)
             {
                 failed = true;
+                if (exception is TimeoutException)
+                {
+                    automaticFault = "Darkroom reageerde niet op tijd. Automatische pogingen zijn gestopt. Controleer Darkroom en kies daarna Herstellen in Kalibratie en diagnose.";
+                    Log(automaticFault);
+                }
                 isoConfirmation.Clear();
                 finalStatus = DarkroomActionStatus.Failure(
                     confirmedIso, selectionAttempted, exception.Message);

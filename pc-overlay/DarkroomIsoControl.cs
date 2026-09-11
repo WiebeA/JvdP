@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace Jvdp.LightDarkroomOverlay
@@ -27,7 +29,7 @@ namespace Jvdp.LightDarkroomOverlay
             if (length < 0 || length > 128) return "";
             StringBuilder text = new StringBuilder(length + 1);
             IntPtr result;
-            if (SendMessageTimeout(control, 0x0148, new IntPtr(index), text, 0x0001 | 0x0002 | 0x0020, 1000, out result) == IntPtr.Zero)
+            if (SendMessageTimeout(control, 0x0148, new IntPtr(index), text, 0x0002 | 0x0020, 1000, out result) == IntPtr.Zero)
                 throw new TimeoutException("De ISO-keuze kon niet worden teruggelezen.");
             return text.ToString();
         }
@@ -53,23 +55,45 @@ namespace Jvdp.LightDarkroomOverlay
                 if (ReadItem(combo, i) == expected) { target = i; break; }
             }
             if (target < 0) throw new InvalidOperationException("ISO " + expected + " ontbreekt in de actuele cameralijst.");
-            SendCompleted(combo, 0x014f, new IntPtr(1), IntPtr.Zero, RemainingIsoTime(deadline));
+            PostChecked(combo, 0x014f, new IntPtr(1), IntPtr.Zero);
+            WaitForIsoState(combo, delegate { return IsIsoDropDownOpen(combo); }, deadline, "De ISO-keuzelijst is niet geopend.");
             int current = SendCompleted(combo, 0x0147, IntPtr.Zero, IntPtr.Zero, RemainingIsoTime(deadline)).ToInt32();
             if (current < 0) throw new InvalidOperationException("De huidige ISO-keuze ontbreekt.");
             int key = (int)(target > current ? Keys.Down : Keys.Up);
             for (int step = 0; step < Math.Abs(target - current); step++)
             {
                 if (VisibleIsoControl != combo) throw new InvalidOperationException("Camera Settings veranderde tijdens de ISO-keuze.");
-                SendCompleted(combo, 0x0100, new IntPtr(key), IntPtr.Zero, RemainingIsoTime(deadline));
-                SendCompleted(combo, 0x0101, new IntPtr(key), IntPtr.Zero, RemainingIsoTime(deadline));
+                int next = current + (target > current ? step + 1 : -(step + 1));
+                PostIsoKey(combo, key);
+                WaitForIsoState(combo, delegate {
+                    return SendCompleted(combo, 0x0147, IntPtr.Zero, IntPtr.Zero, RemainingIsoTime(deadline)).ToInt32() == next;
+                }, deadline, "Darkroom heeft de volgende ISO-keuze niet verwerkt.");
             }
             if (VisibleIsoControl != combo) throw new InvalidOperationException("Camera Settings is niet meer actief.");
-            // Enter must finish (including the parent's selection notification)
-            // before reading back or navigating away. A highlighted item is not a commit.
-            SendCompleted(combo, 0x0100, new IntPtr((int)Keys.Enter), IntPtr.Zero, RemainingIsoTime(deadline));
-            SendCompleted(combo, 0x0101, new IntPtr((int)Keys.Enter), IntPtr.Zero, RemainingIsoTime(deadline));
-            if (IsIsoDropDownOpen(combo) || ReadIsoValue(combo) != expected)
-                throw new InvalidOperationException("Darkroom heeft de ISO-keuze nog niet geaccepteerd.");
+            PostIsoKey(combo, (int)Keys.Enter);
+            WaitForIsoState(combo, delegate { return !IsIsoDropDownOpen(combo) && ReadIsoValue(combo) == expected; },
+                deadline, "Darkroom heeft de ISO-keuze nog niet geaccepteerd.");
+        }
+
+        private static void PostIsoKey(IntPtr combo, int key)
+        {
+            int scan = (int)MapVirtualKey((uint)key, 0);
+            PostChecked(combo, 0x0100, new IntPtr(key), new IntPtr(1 | (scan << 16)));
+            PostChecked(combo, 0x0101, new IntPtr(key), new IntPtr(unchecked((int)0xc0000001) | (scan << 16)));
+        }
+
+        private void WaitForIsoState(IntPtr combo, Func<bool> accepted, DateTime deadline, string failure)
+        {
+            Stopwatch timer = Stopwatch.StartNew();
+            while (timer.ElapsedMilliseconds < 3000)
+            {
+                RemainingIsoTime(deadline);
+                Thread.Sleep(80);
+                RequireReady();
+                if (VisibleIsoControl != combo) throw new InvalidOperationException("Camera Settings veranderde tijdens de ISO-keuze.");
+                if (accepted()) return;
+            }
+            throw new TimeoutException(failure);
         }
     }
 }

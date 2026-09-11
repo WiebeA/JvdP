@@ -25,7 +25,7 @@ namespace Jvdp.LightDarkroomOverlay
         void ExitBooth();
         void RestoreEditor();
         void PresentBooth();
-        // Returns only after the command handler completes; timeout stops the flow.
+        // Queues the command and waits for its observable page transition.
         void SendCommand(int command, int timeoutMilliseconds = 3000);
         void RequestBoothStart();
         string ReadIsoValue(IntPtr control);
@@ -98,7 +98,7 @@ namespace Jvdp.LightDarkroomOverlay
 
             // Selecting Settings AGAIN opens its modal picker. First select
             // Originals so this is a page transition, not a repeated selection.
-            // Each command must finish before the next one is sent. Neither
+            // Each page transition is observed before the next step. Neither
             // depends on focus, timing a mouse click or a private toolbar object.
             log("Opening Settings through Originals -> Settings (543 -> 545).");
             SendCommand(OriginalsPageCommand, deadlineUtc);
@@ -844,7 +844,61 @@ namespace Jvdp.LightDarkroomOverlay
         public void SendCommand(int command, int timeoutMilliseconds = 3000)
         {
             RequireReady();
-            SendCompleted(EditorWindow, 0x0111, new IntPtr(command), IntPtr.Zero, timeoutMilliseconds);
+            if (timeoutMilliseconds <= 0) throw new TimeoutException("De maximale Darkroom-actietijd is verstreken.");
+            string before = PageSignature();
+            identityLog("Queue Darkroom WM_COMMAND " + command + " (0x" + command.ToString("X") + ") to hwnd=" + EditorWindow + ".");
+            PostChecked(EditorWindow, 0x0111, new IntPtr(command), IntPtr.Zero);
+            Stopwatch timer = Stopwatch.StartNew();
+            string previous = null;
+            int stable = 0;
+            while (timer.ElapsedMilliseconds < timeoutMilliseconds)
+            {
+                Thread.Sleep(80);
+                // Read-only probes have a short timeout. They are not an ACK of
+                // the posted command; only a stable page change advances Next.
+                IntPtr response;
+                int remaining = timeoutMilliseconds - (int)timer.ElapsedMilliseconds;
+                if (remaining <= 0) break;
+                if (!IsWindowEnabled(EditorWindow) || SendMessageTimeout(EditorWindow,
+                    0, IntPtr.Zero, IntPtr.Zero, 0x0002 | 0x0020,
+                    (uint)Math.Min(100, remaining), out response) == IntPtr.Zero)
+                { stable = 0; previous = null; continue; }
+                string current = PageSignature();
+                stable = current == previous ? stable + 1 : 1;
+                previous = current;
+                if (stable < 5) continue;
+                if (current != before)
+                {
+                    identityLog("Observed stable page change after command " + command + ".");
+                    return;
+                }
+                // Originals is idempotent and may already be selected. Permit
+                // one subsequent Settings request after a quiet, responsive
+                // interval. Settings and Next never use this no-change fallback.
+                if (command == DarkroomNavigation.OriginalsPageCommand && timer.ElapsedMilliseconds >= 1200)
+                {
+                    identityLog("Originals page unchanged and responsive; may already be selected. Continuing once to Settings.");
+                    return;
+                }
+            }
+            throw new TimeoutException("Darkroom bevestigt geen paginawissel na opdracht " + command +
+                " binnen " + timeoutMilliseconds + " ms. De lichtregeling stopt verdere automatische pogingen.");
+        }
+
+        private string PageSignature()
+        {
+            List<long> controls = new List<long>();
+            EnumProc inspect = delegate(IntPtr child, IntPtr unused)
+            {
+                if (IsWindowVisible(child)) controls.Add(child.ToInt64());
+                return true;
+            };
+            EnumChildWindows(EditorWindow, inspect, IntPtr.Zero);
+            GC.KeepAlive(inspect);
+            controls.Sort();
+            StringBuilder signature = new StringBuilder();
+            foreach (long control in controls) signature.Append(control).Append(';');
+            return signature.ToString();
         }
 
         public void RequestBoothStart()
@@ -858,9 +912,13 @@ namespace Jvdp.LightDarkroomOverlay
 
         internal static IntPtr SendCompleted(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, int timeout)
         {
+            // Never synchronously enter a foreign command/key/dropdown handler.
+            // Those must run through Darkroom's normal message pump.
+            if (message != 0x0146 && message != 0x0147 && message != 0x0149 && message != 0x0157)
+                throw new InvalidOperationException("Alleen uitleesopdrachten mogen synchroon naar Darkroom worden verstuurd.");
             IntPtr result;
             if (timeout <= 0) throw new TimeoutException("De maximale Darkroom-actietijd is verstreken.");
-            if (SendMessageTimeout(window, message, wParam, lParam, 0x0001 | 0x0020,
+            if (SendMessageTimeout(window, message, wParam, lParam, 0x0002 | 0x0020,
                 (uint)timeout, out result) == IntPtr.Zero)
                 throw new TimeoutException("Darkroom heeft opdracht 0x" + message.ToString("X") +
                     " niet binnen " + timeout + " ms verwerkt. Er worden geen vervolgopdrachten verstuurd.");

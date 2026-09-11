@@ -1,5 +1,26 @@
 # Darkroom flow and logging
 
+## Queued navigation and ISO input — 24.6.6
+
+Mutating `WM_COMMAND`, dropdown-open and key messages use `PostMessage` again.
+The synchronous helper accepts only native ComboBox read queries. This avoids
+entering a foreign settings/camera handler synchronously and lets queued keys
+pass through the application's normal message loop and translation.
+
+Settings/Next wait for five stable observations of a changed visible HWND set,
+with bounded read-only responsiveness probes. Originals may already be active:
+after 1.2 seconds of an unchanged, responsive frame it permits one Settings
+request. That fallback does not prove the first command completed. A timeout
+never cancels a previously queued command, so it stops automatic retries until
+the user checks Darkroom and chooses recovery. Command numbers are logged before
+dispatch, not only after completion. ISO keys wait for their expected selection
+and closed dropdown before the retained reopen/readback checks.
+
+Tests distinguish queued from sent mutations, observe keys in a message filter,
+and verify that a stalled page receives one Next command. These tests exercise
+Windows messaging; the reported physical Darkroom/camera hang is not reproduced
+on this machine. See [24.6.6 release notes](../docs/RELEASE-24.6.6.md).
+
 ## Updates with Darkroom open — 24.6.5
 
 Darkroom process presence no longer blocks an explicitly requested update or an

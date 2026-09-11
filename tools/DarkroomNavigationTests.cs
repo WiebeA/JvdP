@@ -157,6 +157,10 @@ internal static class DarkroomNavigationTests
     {
         try
         {
+            Fails(delegate { NativeDarkroomNavigation.SendCompleted(IntPtr.Zero, 0x0111, new IntPtr(545), IntPtr.Zero, 200); },
+                "Synchronous settings mutations are rejected before calling Windows");
+            Fails(delegate { NativeDarkroomNavigation.SendCompleted(IntPtr.Zero, 0x0100, new IntPtr(13), IntPtr.Zero, 200); },
+                "Synchronous ISO keys are rejected before calling Windows");
             FakePort missing = new FakePort { Ready = false, InBooth = true };
             DarkroomNavigation n = Create(missing);
             Fails(delegate { n.OpenCamera(Deadline); }, "Missing editor");
