@@ -19,7 +19,7 @@ namespace Jvdp.LightDarkroomInstaller
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool PostThreadMessage(uint thread, uint message, IntPtr wParam, IntPtr lParam);
 
-        internal static bool Stop(Process process, string root, int session, Action requireDarkroomClosed)
+        internal static bool Stop(Process process, string root, int session, Action requireLegacyShutdownReady)
         {
             if (process.HasExited) return true;
             string path = process.MainModule.FileName;
@@ -31,7 +31,10 @@ namespace Jvdp.LightDarkroomInstaller
             FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
             Version version = new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart, info.FilePrivatePart);
             bool legacy = version.Major > 0 && version <= new Version(24, 6, 0, 0);
-            requireDarkroomClosed();
+            // 24.6.1-24.6.4 understand the request but refuse while Darkroom is
+            // open. New overlays can exit without interacting with Darkroom.
+            bool needsLegacyGuard = version < new Version(24, 6, 5, 0);
+            if (needsLegacyGuard) requireLegacyShutdownReady();
             EnumWindows(delegate(IntPtr window, IntPtr unused)
             {
                 uint id;
@@ -49,7 +52,7 @@ namespace Jvdp.LightDarkroomInstaller
             // killing the process. Never use this compatibility path for newer apps.
             if (legacy)
             {
-                requireDarkroomClosed();
+                requireLegacyShutdownReady();
                 HashSet<uint> threads = new HashSet<uint>();
                 EnumWindows(delegate(IntPtr window, IntPtr unused)
                 {

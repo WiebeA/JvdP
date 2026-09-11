@@ -9,6 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyFileVersion("24.6.0.0")]
 #elif FUTURE
 [assembly: AssemblyFileVersion("25.0.0.0")]
+#elif LIVE
+[assembly: AssemblyFileVersion("24.6.5.0")]
 #else
 [assembly: AssemblyFileVersion("24.6.1.0")]
 #endif
@@ -28,6 +30,9 @@ internal static class UpdateShutdownFixture
         protected override void WndProc(ref Message message)
         {
 #if !LEGACY && !MAINTENANCE && !FUTURE
+#if LIVE
+            if (message.Msg == 0x8002 && File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "iso-busy.txt"))) return;
+#endif
             if (message.Msg == 0x8002) { exitRequested = true; Close(); return; }
 #endif
             base.WndProc(ref message);

@@ -26,11 +26,10 @@ internal static class UpdateShutdownTests
     {
         foreach (bool manual in new[] { false, true })
         foreach (bool maintenance in new[] { false, true })
-        foreach (bool darkroom in new[] { false, true })
-            Check(BoothCoordination.CanInstall(manual, maintenance, darkroom) == (!darkroom && (manual || maintenance)),
-                "Update permission: manual=" + manual + ", maintenance=" + maintenance + ", Darkroom=" + darkroom);
+            Check(BoothCoordination.CanInstall(manual, maintenance) == (manual || maintenance),
+                "Update requires a manual request or maintenance, independently of Darkroom: manual=" + manual + ", maintenance=" + maintenance);
 
-        foreach (string name in new[] { "legacy", "maintenance", "current", "future" })
+        foreach (string name in new[] { "legacy", "maintenance", "current", "live", "future" })
         {
             string root = Path.Combine(args[0], name);
             using (Process process = Process.Start(new ProcessStartInfo {
@@ -47,17 +46,30 @@ internal static class UpdateShutdownTests
                 int session = Process.GetCurrentProcess().SessionId;
                 Check(!OverlayShutdown.Stop(process, Path.Combine(root, "other"), session, delegate { }), "Different install directory is untouched");
                 Check(!OverlayShutdown.Stop(process, root, session + 1, delegate { }), "Different Windows session is untouched");
-                Reject(delegate { OverlayShutdown.Stop(process, root, session, delegate { throw new InvalidOperationException("Darkroom active"); }); },
-                    "Active Darkroom blocks shutdown");
-                Check(!process.HasExited, "Rejected update preserves running overlay");
+                if (name != "live" && name != "future")
+                {
+                    Reject(delegate { OverlayShutdown.Stop(process, root, session, delegate { throw new InvalidOperationException("Old overlay cannot exit while Darkroom is active"); }); },
+                        "Older overlay still gets the one-time migration check");
+                    Check(!process.HasExited, "Rejected migration preserves running overlay");
+                }
                 int guards = 0;
                 if (name == "future")
                 {
                     Reject(delegate { OverlayShutdown.Stop(process, root, session, delegate { guards++; }); }, "Newer app refusing shutdown is never forced closed");
                     Check(!process.HasExited, "Newer app is still running after refusal");
+                    Check(guards == 0, "Future app does not acquire the old Darkroom-closed requirement");
                 }
                 else
                 {
+                    if (name == "live")
+                    {
+                        string busy = Path.Combine(root, "iso-busy.txt");
+                        File.WriteAllText(busy, "ISO change in progress");
+                        Reject(delegate { OverlayShutdown.Stop(process, root, session, delegate { throw new Exception("Darkroom-closed check must not run for 24.6.5+"); }); },
+                            "An active ISO change can refuse update shutdown without being killed");
+                        Check(!process.HasExited, "Busy overlay remains running");
+                        File.Delete(busy);
+                    }
                     if (name == "legacy")
                     {
                         Reject(delegate { OverlayShutdown.Stop(process, root, session, delegate {
@@ -68,7 +80,7 @@ internal static class UpdateShutdownTests
                     }
                     Check(OverlayShutdown.Stop(process, root, session, delegate { guards++; }), name + " accepts upgrade without manual exit or maintenance");
                     Check(File.Exists(Path.Combine(root, "normal-exit.txt")), name + " message loop exits normally, without Process.Kill");
-                    Check(guards == (name == "current" ? 1 : 2), name + " uses the appropriate shutdown protocol");
+                    Check(guards == (name == "live" ? 0 : name == "current" ? 1 : 2), name + " uses the appropriate shutdown protocol");
                 }
             }
             finally

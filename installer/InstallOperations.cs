@@ -48,13 +48,11 @@ namespace Jvdp.LightDarkroomInstaller
             using (OperationLease lease = testMode ? null : OperationLease.TryAcquire(0))
             {
                 if (!testMode && lease == null)
-                    throw new InvalidOperationException("Een ISO-aanpassing of sessie loopt. Probeer installeren tijdens onderhoud opnieuw.");
+                    throw new InvalidOperationException("Een ISO-aanpassing loopt. Probeer installeren opnieuw zodra deze klaar is; Darkroom kan openblijven.");
                 if (!testMode)
                 {
-                    RequireDarkroomClosed();
                     StopForUpdate(installDirectory);
                 }
-                if (!testMode) RequireDarkroomClosed();
                 UpdateTransaction transaction = new UpdateTransaction(installDirectory);
                 if (transaction.Pending) transaction.Rollback();
                 transaction.Begin(new[] { InstalledExeName, UpdaterExeName, InstalledConfigName, "JvdpSessionSignal.exe",

@@ -1,5 +1,20 @@
 # Darkroom flow and logging
 
+## Updates with Darkroom open — 24.6.5
+
+Darkroom process presence no longer blocks an explicitly requested update or an
+update during maintenance. The installer replaces only JvdP components and holds
+the existing operation lease so an ISO operation cannot overlap replacement.
+Overlay shutdown checks its own active ISO action, not Darkroom presence. The
+new overlay does not start ISO operations while the update transaction marker
+exists; normal regulation resumes when installation commits.
+
+The Darkroom-closed check remains only in the migration path for overlay versions
+older than 24.6.5, which cannot accept update shutdown while Darkroom is running.
+Users may close just that old overlay and run the new installer manually to keep
+Darkroom open even during the first upgrade. The old updater's own restriction
+cannot be changed until it is replaced. See [24.6.5](../docs/RELEASE-24.6.5.md).
+
 ## Window compatibility — 24.6.4
 
 Native `WM_COMMAND` navigation remains the control mechanism. Editor discovery

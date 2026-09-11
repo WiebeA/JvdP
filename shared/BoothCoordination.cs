@@ -64,9 +64,11 @@ namespace Jvdp.Reliability
             catch { return false; }
         }
 
-        internal static bool CanInstall(bool manualRequest, bool maintenance, bool darkroomRunning)
+        internal static bool CanInstall(bool manualRequest, bool maintenance)
         {
-            return !darkroomRunning && (manualRequest || maintenance);
+            // Updating our files does not require stopping Darkroom. The
+            // installer holds OperationLease while it replaces the overlay.
+            return manualRequest || maintenance;
         }
 
         internal static bool DarkroomInCurrentSession()

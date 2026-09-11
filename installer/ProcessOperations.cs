@@ -13,13 +13,10 @@ namespace Jvdp.LightDarkroomInstaller
         [DllImport("user32.dll")]
         private static extern bool IsWindowVisible(IntPtr windowHandle);
 
-        private static void RequireDarkroomClosed()
+        private static void RequireLegacyShutdownReady()
         {
-            int session = Process.GetCurrentProcess().SessionId;
-            foreach (Process process in Process.GetProcessesByName("DarkroomBooth"))
-                using (process)
-                    if (process.SessionId == session)
-                        throw new InvalidOperationException("Sluit Darkroom na het evenement voordat je de software bijwerkt.");
+            if (BoothCoordination.DarkroomInCurrentSession())
+                throw new InvalidOperationException("Deze oudere lichtregeling kan zichzelf nog niet afsluiten voor een update terwijl Darkroom openstaat. Sluit alleen JvdP Lichtregeling via het traymenu en start de installatie opnieuw. Darkroom kan openblijven; vanaf versie 24.6.5 gebeurt dit automatisch.");
         }
 
         private static void StopForUpdate(string root)
@@ -44,7 +41,7 @@ namespace Jvdp.LightDarkroomInstaller
                 {
                     process.Kill(); process.WaitForExit(5000); continue;
                 }
-                OverlayShutdown.Stop(process, root, session, RequireDarkroomClosed);
+                OverlayShutdown.Stop(process, root, session, RequireLegacyShutdownReady);
             }
         }
 

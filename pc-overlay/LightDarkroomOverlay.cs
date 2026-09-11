@@ -1811,7 +1811,9 @@ namespace Jvdp.LightDarkroomOverlay
         {
             if (message.Msg == BoothCoordination.ShutdownForUpdate)
             {
-                if (!manualActionRunning && !BoothCoordination.DarkroomInCurrentSession()) ExitApplication();
+                // The installer owns the operation lease. Only our own active
+                // ISO action can delay shutdown; Darkroom stays untouched.
+                if (!manualActionRunning) ExitApplication();
                 return;
             }
             if (message.Msg == 0x0219) ResetSerialBackoff();

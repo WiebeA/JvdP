@@ -110,6 +110,8 @@ namespace Jvdp.LightDarkroomOverlay
         private string GetActionBlockReason(bool automatic)
         {
             if (layoutTestMode) return null;
+            if (File.Exists(Path.Combine(localDirectory, "update-in-progress.txt")))
+                return "Update wordt afgerond; de lichtregeling hervat daarna automatisch.";
             if (maintenanceMode) return "Onderhoud actief; ISO-aanpassingen staan stil.";
             if (automatic && automaticFault != null) return automaticFault;
             if (!SensorIsFresh()) return "Wachten op verse sensormetingen.";
@@ -259,7 +261,6 @@ namespace Jvdp.LightDarkroomOverlay
                 form.Maintenance = delegate(bool enable)
                 {
                     if (manualActionRunning) throw new InvalidOperationException("Wacht tot de ISO-aanpassing klaar is.");
-                    if (enable && darkroomRunning) throw new InvalidOperationException("Sluit Darkroom na afloop van het evenement voordat je onderhoud start.");
                     ReliableFiles.Write(Path.Combine(localDirectory, "maintenance-until.txt"), (enable ? DateTime.UtcNow.AddHours(1) : DateTime.UtcNow).ToString("o"));
                     maintenanceMode = enable;
                     form.Text = enable ? "Kalibratie en diagnose — onderhoud actief" : "Kalibratie en diagnose";

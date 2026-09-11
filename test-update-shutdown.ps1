@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $taskOutput = Join-Path $PSScriptRoot ('artifacts\update-shutdown-tests\' + [Guid]::NewGuid().ToString('N'))
 $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-foreach ($taskVariant in @('legacy', 'maintenance', 'current', 'future')) {
+foreach ($taskVariant in @('legacy', 'maintenance', 'current', 'live', 'future')) {
     $taskDirectory = Join-Path $taskOutput $taskVariant
     New-Item -ItemType Directory -Force -Path $taskDirectory | Out-Null
     $taskExe = Join-Path $taskDirectory 'JvdpLightDarkroomOverlay.exe'

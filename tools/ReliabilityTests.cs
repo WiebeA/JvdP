@@ -146,6 +146,11 @@ internal static class ReliabilityTests
         Set(overlay, "initialPreparationDone", false);
         Set(overlay, "boothMode", false);
         Check(gate.Invoke(overlay, new object[] { true }) == null, "Initial preparation outside Booth Mode remains possible");
+        ReliableFiles.Write(Path.Combine(root, "update-in-progress.txt"), "installer is checking startup health");
+        Check(((string)gate.Invoke(overlay, new object[] { true })).Contains("Update"), "New overlay does not start an automatic ISO action before the update commits");
+        Check(((string)gate.Invoke(overlay, new object[] { false })).Contains("Update"), "Manual ISO changes also wait for the update transaction");
+        File.Delete(Path.Combine(root, "update-in-progress.txt"));
+        Check(gate.Invoke(overlay, new object[] { true }) == null, "Regulation becomes eligible again after update completion");
         Set(overlay, "maintenanceMode", true);
         Check(gate.Invoke(overlay, new object[] { false }) != null, "Maintenance blocks manual as well as automatic actions");
         Check(!BoothCoordination.HasMaintenance(root, now), "No maintenance means no unattended install");

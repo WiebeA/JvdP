@@ -336,9 +336,9 @@ namespace Jvdp.AutoUpdater
             string temporaryInstaller = Path.Combine(cache, "JvdP-Light-Update-" + release.tag_name + ".exe");
             File.WriteAllBytes(temporaryInstaller, installerBytes);
             if (!BoothCoordination.CanInstall(showAfterUpdate,
-                BoothCoordination.HasMaintenance(LocalRoot, DateTime.UtcNow), BoothCoordination.DarkroomInCurrentSession()))
+                BoothCoordination.HasMaintenance(LocalRoot, DateTime.UtcNow)))
             {
-                WriteStatus("ready", release.tag_name, "Update klaar. Sluit Darkroom na het evenement en klik op Update installeren.");
+                WriteStatus("ready", release.tag_name, "Update klaar. Klik op Update installeren; Darkroom kan openblijven.");
                 return false;
             }
             ReliableFiles.Write(PendingReleaseTagPath, release.tag_name);
