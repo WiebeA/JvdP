@@ -107,7 +107,7 @@ namespace Jvdp.LightDarkroomOverlay
                 if (process == null)
                     throw new InvalidOperationException("Darkroom Booth is not running.");
                 NativeDarkroomNavigation native =
-                    new NativeDarkroomNavigation(process.Id);
+                    new NativeDarkroomNavigation(process.Id, Log);
                 navigation = new DarkroomNavigation(native, Log);
                 IntPtr window = native.EditorWindow;
                 LogActionTiming(

@@ -41,19 +41,28 @@ internal static class NativeCameraTests
         private string persisted = "800";
         private bool settings;
         private int page = 1;
-        internal Fixture(string root, bool ignoreCommit)
+        internal Fixture(string root, bool ignoreCommit, bool legacy)
         {
             this.root = root; this.ignoreCommit = ignoreCommit; delay = ignoreCommit ? 0 : 450;
-            Text = "Darkroom isolated native test"; ShowInTaskbar = false;
-            FormBorderStyle = FormBorderStyle.FixedToolWindow; StartPosition = FormStartPosition.Manual;
+            Text = legacy ? "Bruiloft - zaterdag" : "Darkroom isolated native test"; ShowInTaskbar = false;
+            FormBorderStyle = FormBorderStyle.FixedSingle; StartPosition = FormStartPosition.Manual;
             Bounds = new Rectangle(SystemInformation.VirtualScreen.Right + 1024, SystemInformation.VirtualScreen.Top, 500, 350);
             foreach (Screen screen in Screen.AllScreens)
                 if (Bounds.IntersectsWith(screen.Bounds)) throw new Exception("Test window must stay outside every display.");
             camera.Bounds = other.Bounds = new Rectangle(0, 40, 450, 260);
             Controls.Add(camera); Controls.Add(other);
-            CreateWindowEx(0, "STATIC", "toolbar", 0x50000000, 0, 0, 50, 20, Handle, new IntPtr(4083), IntPtr.Zero, IntPtr.Zero);
-            foreach (int id in new[] { 104, 105, 106 })
+            if (!legacy) CreateWindowEx(0, "STATIC", "toolbar", 0x50000000, 0, 0, 50, 20, Handle, new IntPtr(4083), IntPtr.Zero, IntPtr.Zero);
+            if (!legacy)
+            {
+                // A second top-level toolbar in the same application used to
+                // make FindEditor reject an otherwise usable editor as ambiguous.
+                IntPtr palette = CreateWindowEx(0x08000080, "STATIC", "Owned toolbar", unchecked((int)0x90c00000),
+                    Bounds.Left, Bounds.Top + 400, 100, 80, Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                CreateWindowEx(0, "STATIC", "toolbar", 0x50000000, 0, 0, 50, 20, palette, new IntPtr(4083), IntPtr.Zero, IntPtr.Zero);
+            }
+            foreach (int id in legacy ? new int[0] : new[] { 104, 105, 106 })
                 CreateWindowEx(0, "STATIC", "Camera parameter", 0x50000000, 5, (id - 104) * 24, 150, 22, camera.Handle, new IntPtr(id), IntPtr.Zero, IntPtr.Zero);
+            if (legacy) CreateWindowEx(0, "STATIC", "ISO:", 0x50000000, 5, 65, 100, 22, camera.Handle, new IntPtr(501), IntPtr.Zero, IntPtr.Zero);
             iso = Combo(camera.Handle);
             Combo(other.Handle); // A real numeric combo with ID 107 on the wrong page.
             camera.Commit = delegate
@@ -124,14 +133,16 @@ internal static class NativeCameraTests
     {
         if (args.Length > 1 && args[0] == "--fixture")
         {
-            Application.Run(new Fixture(args[1], args.Length > 2)); return 0;
+            Application.Run(new Fixture(args[1], Array.IndexOf(args, "--reject") >= 0,
+                Array.IndexOf(args, "--legacy") >= 0)); return 0;
         }
+        foreach (bool legacy in new[] { false, true })
         foreach (bool rejectedCommit in new[] { false, true })
         {
-            string root = Path.Combine(args[0], rejectedCommit ? "rejected-commit" : "slow-navigation"); Directory.CreateDirectory(root);
+            string root = Path.Combine(args[0], (legacy ? "legacy-" : "") + (rejectedCommit ? "rejected-commit" : "slow-navigation")); Directory.CreateDirectory(root);
             using (Process fixture = Process.Start(new ProcessStartInfo {
                 FileName = Assembly.GetExecutingAssembly().Location,
-                Arguments = "--fixture \"" + root + "\"" + (rejectedCommit ? " --reject" : ""),
+                Arguments = "--fixture \"" + root + "\"" + (rejectedCommit ? " --reject" : "") + (legacy ? " --legacy" : ""),
                 UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden }))
             try
             {
@@ -139,7 +150,9 @@ internal static class NativeCameraTests
                 string ready = Path.Combine(root, "ready.txt");
                 while (!File.Exists(ready) && !fixture.HasExited && clock.ElapsedMilliseconds < 10000) Thread.Sleep(20);
                 Check(File.Exists(ready) && !fixture.HasExited, "Isolated native fixture started");
-                NativeDarkroomNavigation native = new NativeDarkroomNavigation(fixture.Id);
+                NativeDarkroomNavigation native = new NativeDarkroomNavigation(fixture.Id, Console.WriteLine);
+                Check(native.EditorWindow.ToInt64().ToString() == File.ReadAllText(ready),
+                    legacy ? "Toolbar-free event window resolves through the compatibility fallback" : "Multiple owned toolbar windows resolve to the real editor");
                 Check(IsWindowVisible(native.EditorWindow), "Native visibility semantics tested on an off-screen window");
                 clock.Restart(); native.SendCommand(545);
                 if (!rejectedCommit) Check(clock.ElapsedMilliseconds >= 400, "Actual WM_COMMAND completes before the caller continues");

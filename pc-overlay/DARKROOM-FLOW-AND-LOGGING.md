@@ -1,6 +1,30 @@
 # Darkroom flow and logging
 
-## Camera confirmation — 24.6.3
+## Window compatibility — 24.6.4
+
+Native `WM_COMMAND` navigation remains the control mechanism. Editor discovery
+now groups toolbar windows by their application owner, without walking above a
+real frame into an invisible framework tool owner. Missing toolbar 4083 or a
+caption without the word Darkroom no longer blocks the action: a normal process
+frame is used, with Windows' `Process.MainWindowHandle`/owner relationship as the
+tie-breaker for multiple frames. A frame that has itself become a full Booth
+surface can be used to exit Booth before resolving the editor. Stale handles are
+resolved again. All discovery stays inside the selected process. The action log
+records the chosen route and native window inventory.
+
+Camera control 107 still accepts the original neighbouring 104/105/106 controls.
+If those are unavailable, a native ISO label and at least three numeric ISO
+options are enough. Text inspection is bounded and does not load UI Automation
+or scan private memory. Sequential navigation and committed ISO readback are
+retained. This is a compatibility workaround for native Windows controls, not a
+claim that the camera hardware or every Darkroom version has been verified.
+
+The native fixtures now include multiple owned toolbar windows and a window
+titled only with an event name, with no toolbar or 104/105/106 controls. Both run
+the same slow-navigation, committed-selection and rejected-selection scenarios.
+See [the analysis and release notes](../docs/RELEASE-24.6.4.md) for remaining gaps.
+
+## Earlier camera confirmation — 24.6.3
 
 Settings navigation now waits for each `WM_COMMAND` handler to complete using a
 bounded `SendMessageTimeout` before issuing another settings command. The maximum

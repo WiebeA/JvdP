@@ -336,6 +336,48 @@ internal static class DarkroomNavigationTests
                 "Ambiguous editor roots are rejected");
             Check(NativeDarkroomNavigation.SelectSingleEditor(new IntPtr[0]) == IntPtr.Zero,
                 "Missing editor is rejected");
+            string editorReason;
+            IntPtr frame = new IntPtr(42), popup = new IntPtr(43), secondFrame = new IntPtr(44);
+            List<NativeDarkroomNavigation.EditorCandidate> windows = new List<NativeDarkroomNavigation.EditorCandidate> {
+                new NativeDarkroomNavigation.EditorCandidate { Handle = frame, Captioned = true },
+                new NativeDarkroomNavigation.EditorCandidate { Handle = popup, Owner = frame, Captioned = true, Dialog = true }
+            };
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, frame, out editorReason) == frame,
+                "Editor with event title and missing toolbar uses application frame");
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, popup, out editorReason) == frame,
+                "Windows main handle pointing at a dialog resolves to its editor owner");
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, IntPtr.Zero, out editorReason) == frame,
+                "Hidden editor is found even when Windows has no visible main handle");
+            windows.Add(new NativeDarkroomNavigation.EditorCandidate { Handle = secondFrame, Tool = true, Captioned = true });
+            windows[0].Owner = secondFrame;
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, frame, out editorReason) == frame,
+                "Hidden framework tool owner does not steal editor commands");
+            windows[0].Owner = IntPtr.Zero; windows.RemoveAt(2);
+            windows[0].Toolbar = true; windows[1].Toolbar = true;
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, popup, out editorReason) == frame,
+                "Toolbar windows with the same owner do not create false ambiguity");
+            windows.Add(new NativeDarkroomNavigation.EditorCandidate { Handle = secondFrame, Captioned = true, Toolbar = true });
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, frame, out editorReason) == frame,
+                "Windows main frame resolves multiple toolbar roots");
+            windows[0].Toolbar = windows[1].Toolbar = windows[2].Toolbar = false;
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, secondFrame, out editorReason) == secondFrame,
+                "Legacy main-window fallback chooses Windows' frame among multiple frames");
+            windows[2].Tool = true;
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, secondFrame, out editorReason) == frame,
+                "A floating tool window never replaces the editor fallback");
+            windows.RemoveAt(0); windows.RemoveAt(1);
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, popup, out editorReason) == IntPtr.Zero,
+                "An orphan dialog alone is not treated as a command destination");
+            windows[0].Owner = popup;
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, popup, out editorReason) == IntPtr.Zero,
+                "Invalid owner cycle is bounded");
+            windows.Clear();
+            windows.Add(new NativeDarkroomNavigation.EditorCandidate { Handle = frame, Booth = true });
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, frame, out editorReason) == frame,
+                "A frame transformed into Booth can be exited before resolving the editor");
+            windows[0].Booth = false;
+            Check(NativeDarkroomNavigation.ChooseEditor(windows, frame, out editorReason) == IntPtr.Zero,
+                "A bare preview handle is not sufficient for the fullscreen fallback");
             Rectangle monitor = new Rectangle(0, 0, 1920, 1080);
             Check(!NativeDarkroomNavigation.IsBoothSurface(monitor, monitor, 0xc00000, 0),
                 "Maximized normal editor is not Booth Mode");

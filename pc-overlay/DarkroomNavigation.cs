@@ -308,44 +308,126 @@ namespace Jvdp.LightDarkroomOverlay
         private const int ToolbarControlId = 4083;
         private const int IsoControlId = 107;
         private readonly int processId;
+        private readonly Action<string> identityLog;
         private static int menuReadInProgress;
         internal IntPtr EditorWindow { get; private set; }
 
-        internal NativeDarkroomNavigation(int processId)
+        internal NativeDarkroomNavigation(int processId, Action<string> log = null)
         {
             this.processId = processId;
-            EditorWindow = FindEditor(processId);
+            identityLog = log ?? delegate(string text) { };
             RequireEditorIdentity();
         }
 
-        // Both Darkroom toolbars share ID 4083. Their common top-level owner,
-        // not either toolbar's position or private C++ object, is the command
-        // destination. Hidden children are included while Booth Mode is active.
+        // Windows' main-window/owner relationship is a compatibility fallback.
+        // A private toolbar ID and the product name in a caption are hints, not
+        // requirements shared by every Darkroom version and event.
         internal static IntPtr FindEditor(int processId)
         {
-            List<IntPtr> candidates = new List<IntPtr>();
+            string reason;
+            return FindEditor(processId, out reason);
+        }
+
+        internal sealed class EditorCandidate
+        {
+            internal IntPtr Handle, Owner;
+            internal bool Toolbar, Captioned, Dialog, Tool, Booth;
+        }
+
+        internal static IntPtr ChooseEditor(IList<EditorCandidate> windows, IntPtr main, out string reason)
+        {
+            Dictionary<IntPtr, EditorCandidate> byHandle = new Dictionary<IntPtr, EditorCandidate>();
+            foreach (EditorCandidate window in windows) byHandle[window.Handle] = window;
+            Func<IntPtr, IntPtr> root = delegate(IntPtr handle)
+            {
+                HashSet<IntPtr> visited = new HashSet<IntPtr>();
+                EditorCandidate window;
+                while (byHandle.TryGetValue(handle, out window) && window.Owner != IntPtr.Zero &&
+                    byHandle.ContainsKey(window.Owner))
+                {
+                    if (!visited.Add(handle)) return IntPtr.Zero;
+                    // Frameworks may own the real frame with an invisible tool
+                    // window solely to keep it off the taskbar. It cannot route
+                    // editor commands, so do not climb above the real frame.
+                    EditorCandidate parent = byHandle[window.Owner];
+                    if (parent.Tool && !parent.Toolbar) break;
+                    handle = window.Owner;
+                }
+                return byHandle.ContainsKey(handle) ? handle : IntPtr.Zero;
+            };
+            List<IntPtr> toolbars = new List<IntPtr>();
+            List<IntPtr> frames = new List<IntPtr>();
+            foreach (EditorCandidate window in windows)
+            {
+                IntPtr owner = root(window.Handle);
+                if (owner == IntPtr.Zero) continue;
+                if (window.Toolbar && !toolbars.Contains(owner)) toolbars.Add(owner);
+                if (window.Handle == owner && window.Captioned && !window.Dialog && !window.Tool)
+                    frames.Add(owner);
+            }
+            IntPtr mainRoot = root(main);
+            IntPtr selected = SelectSingleEditor(toolbars);
+            if (selected != IntPtr.Zero) { reason = "toolbar owner"; return selected; }
+            // Prefer the same application frame Windows selects when there are
+            // multiple independent frames, rather than rejecting every window.
+            if (mainRoot != IntPtr.Zero && toolbars.Contains(mainRoot))
+            { reason = "Windows main window among toolbar owners"; return mainRoot; }
+            selected = SelectSingleEditor(frames);
+            if (selected != IntPtr.Zero) { reason = "application frame (toolbar/title fallback)"; return selected; }
+            if (mainRoot != IntPtr.Zero && frames.Contains(mainRoot))
+            { reason = "Windows main window/owner (toolbar/title fallback)"; return mainRoot; }
+            // Some builds turn the application frame itself into Booth Mode,
+            // removing its caption and editor children until Escape is handled.
+            List<IntPtr> booths = new List<IntPtr>();
+            foreach (EditorCandidate window in windows)
+                if (window.Booth && !window.Dialog && !window.Tool && root(window.Handle) == window.Handle)
+                    booths.Add(window.Handle);
+            selected = booths.Contains(mainRoot) ? mainRoot : SelectSingleEditor(booths);
+            if (selected != IntPtr.Zero) { reason = "Booth frame; resolve editor after leaving Booth"; return selected; }
+            reason = "no application frame or toolbar owner; windows=" + windows.Count;
+            return IntPtr.Zero;
+        }
+
+        private static IntPtr FindEditor(int processId, out string reason)
+        {
+            List<EditorCandidate> candidates = new List<EditorCandidate>();
             List<IntPtr> windows = ProcessWindows(processId);
+            HashSet<IntPtr> booths = new HashSet<IntPtr>(FindBoothWindows(processId, IntPtr.Zero));
             foreach (IntPtr window in windows)
             {
-                if (FindChild(window, ToolbarControlId, false, false) != IntPtr.Zero)
-                    candidates.Add(window);
+                candidates.Add(new EditorCandidate {
+                    Handle = window, Owner = GetWindow(window, 4),
+                    Toolbar = FindChild(window, ToolbarControlId, false, false) != IntPtr.Zero,
+                    Captioned = (GetWindowLong(window, -16) & 0x00c00000) == 0x00c00000,
+                    Tool = (GetWindowLong(window, -20) & 0x80) != 0,
+                    Dialog = String.Equals(ClassName(window), "#32770", StringComparison.Ordinal),
+                    Booth = booths.Contains(window)
+                });
             }
-            if (candidates.Count > 0)
-                return SelectSingleEditor(candidates);
-            // Some versions destroy rather than hide their editor controls in
-            // Booth Mode. The unique unowned, captioned application frame is
-            // still identifiable without reading its private process memory.
-            foreach (IntPtr window in windows)
+            IntPtr main = IntPtr.Zero;
+            try
             {
-                StringBuilder caption = new StringBuilder(512);
+                using (Process process = Process.GetProcessById(processId))
+                { process.Refresh(); main = process.MainWindowHandle; }
+            }
+            catch (ArgumentException) { }
+            catch (InvalidOperationException) { }
+            return ChooseEditor(candidates, main, out reason);
+        }
+
+        private void ResolveEditor()
+        {
+            string reason;
+            EditorWindow = FindEditor(processId, out reason);
+            identityLog("Darkroom editor: pid=" + processId + ", hwnd=" + EditorWindow + ", route=" + reason + ".");
+            foreach (IntPtr window in ProcessWindows(processId))
+            {
+                StringBuilder caption = new StringBuilder(256);
                 GetWindowText(window, caption, caption.Capacity);
-                if (GetWindow(window, 4) == IntPtr.Zero &&
-                    (GetWindowLong(window, -16) & 0x00c00000) != 0 &&
-                    !String.Equals(ClassName(window), "#32770", StringComparison.Ordinal) &&
-                    caption.ToString().IndexOf("Darkroom", StringComparison.OrdinalIgnoreCase) >= 0)
-                    candidates.Add(window);
+                identityLog("Darkroom window: hwnd=" + window + ", owner=" + GetWindow(window, 4) +
+                    ", class=" + ClassName(window) + ", style=0x" + GetWindowLong(window, -16).ToString("X") +
+                    ", exStyle=0x" + GetWindowLong(window, -20).ToString("X") + ", title='" + caption + "'.");
             }
-            return SelectSingleEditor(candidates);
         }
 
         internal static IntPtr SelectSingleEditor(IList<IntPtr> candidates)
@@ -375,11 +457,14 @@ namespace Jvdp.LightDarkroomOverlay
         {
             uint owner;
             if (EditorWindow == IntPtr.Zero || !IsWindow(EditorWindow) ||
+                GetWindowThreadProcessId(EditorWindow, out owner) == 0 || owner != (uint)processId)
+                ResolveEditor();
+            if (EditorWindow == IntPtr.Zero || !IsWindow(EditorWindow) ||
                 GetWindowThreadProcessId(EditorWindow, out owner) == 0 ||
                 owner != (uint)processId)
                 throw new InvalidOperationException(
-                    "Het Darkroom-hoofdvenster kon niet eenduidig worden gevonden. " +
-                    "Open eerst het gewenste event in Darkroom.");
+                    "Darkroom draait, maar Windows geeft nog geen bruikbaar bedieningsvenster. " +
+                    "Open het event en probeer opnieuw. De gevonden vensters staan in het diagnoselog.");
         }
 
         public bool BoothVisible
@@ -452,7 +537,9 @@ namespace Jvdp.LightDarkroomOverlay
             EnumProc inspect = delegate(IntPtr child, IntPtr unused)
             {
                 if (GetDlgCtrlID(child) != IsoControlId || !IsWindowVisible(child) ||
-                    !IsWindowEnabled(child) || !IsUsableCombo(child) || !HasCameraControls(GetParent(child))) return true;
+                    !IsWindowEnabled(child) || !IsUsableCombo(child)) return true;
+                IntPtr parent = GetParent(child);
+                if (!HasCameraControls(parent) && !(HasIsoLabel(parent) && HasIsoValues(child))) return true;
                 if (result != IntPtr.Zero) { ambiguous = true; return false; }
                 result = child; return true;
             };
@@ -478,6 +565,47 @@ namespace Jvdp.LightDarkroomOverlay
             EnumChildWindows(parent, inspect, IntPtr.Zero);
             GC.KeepAlive(inspect);
             return mode && aperture && shutter;
+        }
+
+        private static bool HasIsoLabel(IntPtr parent)
+        {
+            // Other camera models/versions do not expose all three neighbouring
+            // parameters. A native ISO label plus the ISO values is sufficient;
+            // no UI Automation, screenshot or private object layout is needed.
+            bool found = false;
+            int inspected = 0;
+            Stopwatch budget = Stopwatch.StartNew();
+            EnumProc inspect = delegate(IntPtr child, IntPtr unused)
+            {
+                if (++inspected > 64 || budget.ElapsedMilliseconds >= 250) return false;
+                if (!IsWindowVisible(child)) return true;
+                StringBuilder text = new StringBuilder(128);
+                IntPtr result;
+                if (SendMessageTimeout(child, 0x000d, new IntPtr(text.Capacity), text,
+                    0x0002 | 0x0020, 40, out result) == IntPtr.Zero) return true;
+                string label = text.ToString().Trim().TrimEnd(':').Replace("&", "").Trim().ToUpperInvariant();
+                found = label == "ISO" || label == "ISO SPEED" || label == "ISO VALUE" ||
+                    label == "ISO WAARDE" || label == "ISO-WAARDE" || label == "ISO SNELHEID";
+                return !found;
+            };
+            EnumChildWindows(parent, inspect, IntPtr.Zero);
+            GC.KeepAlive(inspect);
+            return found;
+        }
+
+        private static bool HasIsoValues(IntPtr combo)
+        {
+            int count = SendCompleted(combo, 0x0146, IntPtr.Zero, IntPtr.Zero, 200).ToInt32();
+            if (count < 3 || count > 100) return false;
+            HashSet<int> values = new HashSet<int>();
+            for (int i = 0; i < count; i++)
+            {
+                int value;
+                if (Int32.TryParse(ReadItem(combo, i), out value) && value >= 50 && value <= 409600)
+                    values.Add(value);
+                if (values.Count >= 3) return true;
+            }
+            return false;
         }
 
         public bool TryDismissSettingsMenu(int timeoutMilliseconds)
@@ -684,6 +812,7 @@ namespace Jvdp.LightDarkroomOverlay
 
         public void RestoreEditor()
         {
+            RequireEditorIdentity();
             if (!BoothVisible)
                 ShowWindowAsync(EditorWindow, 9);
         }
