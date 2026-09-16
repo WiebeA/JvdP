@@ -1,0 +1,112 @@
+name: Keep latest 3 build versions
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview deletions without removing artifacts
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: retain-build-artifacts
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Keep the latest three successful main builds
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+          BUILD_WORKFLOW: ci.yml
+          ARTIFACT_PATTERN: '^jvdp-[0-9a-f]{40}$'
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const dryRun = process.env.DRY_RUN === 'true';
+            const pattern = new RegExp(process.env.ARTIFACT_PATTERN);
+            const { data: workflow } = await github.rest.actions.getWorkflow({
+              owner, repo, workflow_id: process.env.BUILD_WORKFLOW
+            });
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner, repo, per_page: 100
+            });
+            const candidates = artifacts.filter(a => !a.expired && pattern.test(a.name)
+              && a.workflow_run?.repository_id === context.payload.repository.id
+              && a.workflow_run?.head_repository_id === context.payload.repository.id);
+            const runs = new Map();
+            for (const artifact of candidates) {
+              const id = artifact.workflow_run.id;
+              if (!runs.has(id)) {
+                const { data: run } = await github.rest.actions.getWorkflowRun({owner, repo, run_id: id});
+                runs.set(id, run);
+              }
+            }
+            
+            // Only successful main builds with an available artifact qualify as backups.
+            // Never execute or download code/artifacts from the triggering build.
+            const successful = [...runs.values()].filter(run => run.workflow_id === workflow.id
+              && run.head_branch === 'main' && run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => b.run_number - a.run_number);
+            const kept = successful.slice(0, 3);
+            if (kept.length < 3) {
+              core.notice(`Only ${kept.length} successful main builds have artifacts; nothing deleted.`);
+              return;
+            }
+            const cutoff = kept[2].run_number;
+            const keptIds = new Set(kept.map(run => run.id));
+            const retained = candidates.filter(a => keptIds.has(a.workflow_run.id));
+            // Preserve active builds and anything newer than our oldest retained version.
+            // Older completed test/failed runs of this same workflow can also be removed.
+            const obsolete = candidates.filter(a => {
+              const run = runs.get(a.workflow_run.id);
+              return run.workflow_id === workflow.id && run.status === 'completed'
+                && run.run_number < cutoff;
+            });
+            const bytes = obsolete.reduce((sum, a) => sum + a.size_in_bytes, 0);
+            core.info(`Keeping: ${retained.map(a => `${a.name} (${a.id})`).join(', ')}`);
+            core.info(`${dryRun ? 'Would delete' : 'Deleting'} ${obsolete.length} artifacts, ${bytes} bytes.`);
+            for (const artifact of obsolete) {
+              // Recheck the producing run so a newly started rerun is never cleaned up.
+              const { data: currentRun } = await github.rest.actions.getWorkflowRun({
+                owner, repo, run_id: artifact.workflow_run.id
+              });
+              if (currentRun.status !== 'completed' || currentRun.workflow_id !== workflow.id
+                  || currentRun.run_number >= cutoff) {
+                core.info(`Preserving artifact ${artifact.id}: its run changed during cleanup.`);
+                continue;
+              }
+              core.info(`${dryRun ? 'Would delete' : 'Delete'} ${artifact.name} (${artifact.id})`);
+              if (!dryRun) {
+                try {
+                  await github.rest.actions.deleteArtifact({owner, repo, artifact_id: artifact.id});
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                  core.info(`Artifact ${artifact.id} was already removed.`);
+                }
+              }
+            }
+            await core.summary
+              .addHeading('Build artifact retention')
+              .addRaw(`Keep the latest three successful main builds. Existing expiry dates still apply.\n\n`)
+              .addTable([
+                [{data: 'Kept artifact', header: true}, {data: 'Size (MiB)', header: true}],
+                ...retained.map(a => [a.name, (a.size_in_bytes / 1024 / 1024).toFixed(1)])
+              ])
+              .addRaw(`\n${dryRun ? 'Dry run: eligible for deletion' : 'Cleanup candidates processed'}: ${obsolete.length} artifacts (${(bytes / 1024 / 1024).toFixed(1)} MiB).\n`)
+              .write();
